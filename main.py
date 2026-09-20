@@ -38,6 +38,117 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 _BATCH_CHUNK_SIZE = 500
 
 
+def format_supabase_error(e: Exception) -> str:
+    """Extracts granular PostgREST error details (code, message, details, hint)
+    from supabase-py exceptions for immediate diagnosability.
+    """
+    details = []
+    for attr in ("code", "message", "details", "hint"):
+        val = getattr(e, attr, None)
+        if val:
+            details.append(f"{attr}={val}")
+    if hasattr(e, "response") and e.response is not None:
+        try:
+            details.append(f"status_code={getattr(e.response, 'status_code', None)}")
+            details.append(f"response_text={getattr(e.response, 'text', None)}")
+        except Exception:
+            pass
+    if hasattr(e, "args") and e.args:
+        details.append(f"args={e.args}")
+    if not details:
+        details.append(str(e))
+    return " | ".join(str(d) for d in details)
+
+
+def build_sighting_record(
+    target: str,
+    indicator_type: str,
+    raw_value: str,
+    cid: str,
+    author: str,
+    author_channel: str,
+    video_id: str,
+    video_title: str,
+    video_url: str,
+    lane: str,
+    is_reply: bool,
+    raw_text: str,
+    posted_time: str,
+    llm_is_fraud: bool,
+    llm_role: str,
+    llm_confidence: float,
+    llm_reason: str,
+    heuristic_score: float,
+    channel_meta: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Constructs a candidate_sightings payload matching the database schema."""
+    return {
+        "handle_norm": target,
+        "indicator_type": indicator_type,
+        "raw_value": raw_value,
+        "comment_id": cid,
+        "author": author,
+        "author_channel_id": author_channel,
+        "video_id": video_id,
+        "video_title": video_title,
+        "video_url": video_url,
+        "lane": lane,
+        "is_reply": is_reply,
+        "comment_text": raw_text,
+        "posted_time": posted_time,
+        "llm_is_fraud": llm_is_fraud,
+        "llm_role": llm_role,
+        "llm_confidence": llm_confidence,
+        "llm_reason": llm_reason,
+        "heuristic_score": heuristic_score,
+        "channel_meta": channel_meta
+    }
+
+
+def build_handle_payload(
+    handle_norm: str,
+    indicator_type: str,
+    campaign: Dict[str, Any],
+    tier: str,
+    rep_video_url: str
+) -> Dict[str, Any]:
+    """Constructs a handles table payload matching the database schema."""
+    return {
+        "handle_norm": handle_norm,
+        "indicator_type": indicator_type,
+        "distinct_video_count": campaign["distinct_video_count"],
+        "distinct_author_count": campaign["distinct_author_count"],
+        "campaign_score": campaign["campaign_score"],
+        "tier": tier,
+        "status": campaign["status"],
+        "evidence": campaign["evidence"],
+        "representative_video_url": rep_video_url,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+
+
+def build_lead_payload(
+    handle_norm: str,
+    indicator_type: str,
+    campaign: Dict[str, Any],
+    tier: str,
+    rep_video_url: str
+) -> Dict[str, Any]:
+    """Constructs an actionable_leads table payload matching the database schema."""
+    return {
+        "handle_norm": handle_norm,
+        "indicator_type": indicator_type,
+        "distinct_video_count": campaign["distinct_video_count"],
+        "distinct_author_count": campaign["distinct_author_count"],
+        "campaign_score": campaign["campaign_score"],
+        "tier": tier,
+        "status": campaign["status"],
+        "evidence": campaign["evidence"],
+        "representative_video_url": rep_video_url,
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+
+
 class PipelineTelemetry:
     def __init__(self):
         self.comments_scanned = 0
@@ -94,7 +205,7 @@ class StateManager:
             try:
                 supabase.table("seen_videos").upsert({"video_id": video_id}).execute()
             except Exception as e:
-                logger.debug(f"Failed to upsert seen_video: {e}")
+                logger.error(f"Failed to upsert seen_video ({video_id}): {format_supabase_error(e)}")
             self.seen_videos.add(video_id)
 
     def is_comment_seen(self, comment_id: str) -> bool:
@@ -119,7 +230,7 @@ class StateManager:
             try:
                 supabase.table("seen_comments").upsert(chunk).execute()
             except Exception as e:
-                logger.debug(f"Failed to flush seen_comments: {e}")
+                logger.error(f"Failed to flush seen_comments batch ({len(chunk)} items): {format_supabase_error(e)}")
         self._comment_buffer.clear()
 
     def flush_sightings(self, telemetry: PipelineTelemetry):
@@ -131,11 +242,33 @@ class StateManager:
                 supabase.table("candidate_sightings").upsert(chunk).execute()
                 telemetry.sightings_written += len(chunk)
             except Exception as e:
-                logger.debug(f"Failed to flush candidate_sightings (table may need schema.sql applied): {e}")
+                err_detail = format_supabase_error(e)
+                logger.error(f"CRITICAL: Failed to flush candidate_sightings batch ({len(chunk)} items): {err_detail}")
+                raise RuntimeError(f"candidate_sightings write failed: {err_detail}") from e
         self._sightings_buffer.clear()
 
 
 def run_pipeline(
+    limit_per_query: int = 5,
+    max_comments: int = 50,
+    query_type: str = "ALL",
+    pivot_mode: bool = False
+):
+    try:
+        _run_pipeline_internal(
+            limit_per_query=limit_per_query,
+            max_comments=max_comments,
+            query_type=query_type,
+            pivot_mode=pivot_mode
+        )
+    except RuntimeError as e:
+        if "candidate_sightings" in str(e):
+            logger.critical("STOPPING: candidate_sightings writes are failing, evidence is not being persisted.")
+            return
+        raise
+
+
+def _run_pipeline_internal(
     limit_per_query: int = 5,
     max_comments: int = 50,
     query_type: str = "ALL",
@@ -152,7 +285,11 @@ def run_pipeline(
         logger.info("⚡ Executing Priority Pivot Sweep on Confirmed & Probable Targets...")
         try:
             res_handles = supabase.table("handles").select("handle_norm, campaign_score").gte("campaign_score", 50).execute()
-            for h in (res_handles.data or []):
+            handles_to_pivot = res_handles.data or []
+            if not handles_to_pivot:
+                res_all = supabase.table("handles").select("handle_norm, campaign_score").execute()
+                handles_to_pivot = res_all.data or []
+            for h in handles_to_pivot:
                 p_videos = pivot_on_handle(h["handle_norm"])
                 for pv in p_videos:
                     if not state.is_video_seen(pv.video_id):
@@ -242,27 +379,27 @@ def run_pipeline(
                         llm_role = intel.get("role", "NEUTRAL")
                         llm_is_fraud = intel.get("is_fraud", False)
 
-                        sighting_record = {
-                            "handle_norm": target,
-                            "indicator_type": ind.indicator_type,
-                            "raw_value": ind.raw_value,
-                            "comment_id": cid,
-                            "author": author,
-                            "author_channel_id": author_channel,
-                            "video_id": video.video_id,
-                            "video_title": video.title,
-                            "video_url": video.url,
-                            "lane": video.lane,
-                            "is_reply": is_reply,
-                            "comment_text": raw_text,
-                            "posted_time": posted_time,
-                            "llm_is_fraud": llm_is_fraud,
-                            "llm_role": llm_role,
-                            "llm_confidence": intel.get("confidence", 0.0),
-                            "llm_reason": intel.get("reason", ""),
-                            "heuristic_score": ind.confidence,
-                            "channel_meta": channel_meta
-                        }
+                        sighting_record = build_sighting_record(
+                            target=target,
+                            indicator_type=ind.indicator_type,
+                            raw_value=ind.raw_value,
+                            cid=cid,
+                            author=author,
+                            author_channel=author_channel,
+                            video_id=video.video_id,
+                            video_title=video.title,
+                            video_url=video.url,
+                            lane=video.lane,
+                            is_reply=is_reply,
+                            raw_text=raw_text,
+                            posted_time=posted_time,
+                            llm_is_fraud=llm_is_fraud,
+                            llm_role=llm_role,
+                            llm_confidence=intel.get("confidence", 0.0),
+                            llm_reason=intel.get("reason", ""),
+                            heuristic_score=ind.confidence,
+                            channel_meta=channel_meta
+                        )
 
                         # Stage to candidate_sightings buffer
                         state.buffer_sighting(sighting_record)
@@ -301,42 +438,32 @@ def run_pipeline(
         rep_video_url = first_sighting.get("video_url", "")
 
         # 1. Update/Upsert handles table
-        handle_payload = {
-            "handle_norm": handle_norm,
-            "indicator_type": indicator_type,
-            "distinct_video_count": campaign["distinct_video_count"],
-            "distinct_author_count": campaign["distinct_author_count"],
-            "campaign_score": campaign["campaign_score"],
-            "tier": tier,
-            "status": campaign["status"],
-            "evidence": campaign["evidence"],
-            "representative_video_url": rep_video_url,
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
+        handle_payload = build_handle_payload(
+            handle_norm=handle_norm,
+            indicator_type=indicator_type,
+            campaign=campaign,
+            tier=tier,
+            rep_video_url=rep_video_url
+        )
         try:
             supabase.table("handles").upsert(handle_payload).execute()
         except Exception as e:
-            logger.debug(f"Failed to upsert handles row: {e}")
+            logger.error(f"Failed to upsert handles row ({handle_norm}): {format_supabase_error(e)}")
 
         # 2. Promote to actionable_leads ONLY if CONFIRMED or PROBABLE
         if tier in ("CONFIRMED", "PROBABLE"):
             logger.info(f"⭐ PROMOTED TO LEADS: [{tier}] {handle_norm} (Score: {campaign['campaign_score']})")
-            lead_payload = {
-                "handle_norm": handle_norm,
-                "indicator_type": indicator_type,
-                "distinct_video_count": campaign["distinct_video_count"],
-                "distinct_author_count": campaign["distinct_author_count"],
-                "campaign_score": campaign["campaign_score"],
-                "tier": tier,
-                "status": campaign["status"],
-                "evidence": campaign["evidence"],
-                "representative_video_url": rep_video_url,
-                "updated_at": datetime.now(timezone.utc).isoformat()
-            }
+            lead_payload = build_lead_payload(
+                handle_norm=handle_norm,
+                indicator_type=indicator_type,
+                campaign=campaign,
+                tier=tier,
+                rep_video_url=rep_video_url
+            )
             try:
                 supabase.table("actionable_leads").upsert(lead_payload).execute()
             except Exception as e:
-                logger.debug(f"Failed to upsert actionable_leads row: {e}")
+                logger.error(f"Failed to upsert actionable_leads row ({handle_norm}): {format_supabase_error(e)}")
 
     # --- Phase 5: Observability Summary ---
     telemetry.print_summary()
@@ -348,7 +475,12 @@ def main():
     parser.add_argument("--limit", type=int, default=5, help="Max videos to process per query")
     parser.add_argument("--max-comments", type=int, default=50, help="Max comments to parse per video")
     parser.add_argument("--query-type", type=str, default="ALL", choices=["ALL", "VICTIM_RICH", "LURE", "EXPOSURE"])
-    parser.add_argument("--pivot", action="store_true", help="Enable seed-to-campaign pivot expansion")
+    parser.add_argument(
+        "--pivot", "--rescan-known-handles",
+        dest="pivot",
+        action="store_true",
+        help="Enable seed-to-campaign pivot expansion / rescan on known handles from handles table"
+    )
 
     args = parser.parse_args()
 

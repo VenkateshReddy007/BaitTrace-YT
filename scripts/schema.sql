@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS candidate_sightings (
     llm_confidence DOUBLE PRECISION DEFAULT 0.0,
     llm_reason TEXT,
     heuristic_score DOUBLE PRECISION DEFAULT 0.0,
+    channel_meta JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT uq_sighting_handle_comment UNIQUE (handle_norm, comment_id)
 );
@@ -79,3 +80,6 @@ CREATE TABLE IF NOT EXISTS handles (
 
 CREATE INDEX IF NOT EXISTS idx_handles_tier ON handles(tier);
 CREATE INDEX IF NOT EXISTS idx_handles_score ON handles(campaign_score);
+
+-- Migration-safe idempotent column additions:
+ALTER TABLE IF EXISTS candidate_sightings ADD COLUMN IF NOT EXISTS channel_meta JSONB DEFAULT '{}'::jsonb;
