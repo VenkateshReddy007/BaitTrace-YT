@@ -5,7 +5,7 @@ import re
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Set
 from pydantic import BaseModel
 
 logging.basicConfig(
@@ -30,6 +30,20 @@ class ProcessedEvidence(BaseModel):
     cleaned_comment: str
     indicators: List[ExtractedIndicator]
     extracted_at: datetime
+
+# --- Stopwords & Validation Constants ---
+
+TG_STOPWORDS: Set[str] = {
+    "phone", "vision", "option", "gram", "channel", "joinchat", "group",
+    "link", "id", "username", "account", "number", "app", "official",
+    "support", "admin", "video", "share", "com", "me", "http", "https", "www"
+}
+
+UPI_PSP_ALLOWLIST: str = (
+    "okaxis|oksbi|okhdfcbank|okicici|ybl|ibl|axl|paytm|apl|upi|airtel|freecharge|"
+    "jupiteraxis|fam|yapl|abfspay|timecosmos|waaxis|waicici|wasbi|rmhdfcbank|"
+    "postbank|kotak|indus|idfcbank|sbi|hdfcbank|icici|axisbank|barodampay"
+)
 
 # --- Normalization & De-obfuscation ---
 
@@ -63,20 +77,65 @@ def normalize_text(text: str) -> str:
 # --- Entity Extractors ---
 
 PATTERNS = {
-    # Telegram: t.me/link, telegram.dog, or explicit @handle
-    "TG_LINK": re.compile(r"(?:https?://)?(?:t\.me|telegram\.me|telegram\.dog)/(?:joinchat/)?([\+a-zA-Z0-9_]{5,32})", re.IGNORECASE),
-    "TG_MENTION": re.compile(r"(?:telegram|tg|tele)[^\w\+]*([\+a-zA-Z0-9_]{5,32})", re.IGNORECASE),
+    # Telegram Links: t.me/link, telegram.me, or telegram.dog
+    "TG_LINK": re.compile(
+        r"(?:https?://)?(?:t\.me|telegram\.me|telegram\.dog)/(?:joinchat/)?([\+a-zA-Z0-9_]{5,32})\b",
+        re.IGNORECASE
+    ),
+    
+    # Telegram Mentions: require left word boundary, drop bare 'tele', require separator or explicit @
+    # Accepts: telegram | telegam | telgram | tele gram | tg | tele-gram
+    "TG_MENTION": re.compile(
+        r"(?i)(?<![a-z0-9])(?:telegram|telegam|telgram|tele[\s-]gram|tg)(?![a-z])(?:[\s\t]*(?:->|[:\-–—>])\s*@?|[\s\t]+@)([a-zA-Z0-9_]{5,32})\b"
+    ),
     
     # WhatsApp: wa.me links or api.whatsapp.com
-    "WA_LINK": re.compile(r"(?:https?://)?(?:wa\.me|api\.whatsapp\.com/send\?phone=)/?(\+?\d{10,13})", re.IGNORECASE),
-    "WA_KEYWORD": re.compile(r"(?:whatsapp|wa|wsp|wtsp)[^\w\+]*((?:(?:\+|0{0,2})91)?[6-9]\d{9})", re.IGNORECASE),
+    "WA_LINK": re.compile(
+        r"(?:https?://)?(?:wa\.me|api\.whatsapp\.com/send\?phone=)/?(\+?\d{10,13})\b",
+        re.IGNORECASE
+    ),
+    "WA_KEYWORD": re.compile(
+        r"(?i)(?<![a-z0-9])(?:whatsapp|wa|wsp|wtsp)(?![a-z])[^\w\+]*((?:(?:\+|0{0,2})91)?[6-9]\d{9})\b"
+    ),
     
-    # Indian Mobile Numbers: Starts with 6, 7, 8, or 9
-    "IN_PHONE": re.compile(r"(?:(?:\+|0{0,2})91[\s\-]*)?([6-9]\d{9})\b"),
+    # Indian Mobile Numbers: Starts with 6, 7, 8, or 9; left and right digit guards
+    "IN_PHONE": re.compile(
+        r"(?i)(?<!\d)(?:(?:\+|0{0,2})91[\s\-]*)?([6-9]\d{9})(?!\d)"
+    ),
     
-    # UPI VPA patterns (user@provider)
-    "UPI_VPA": re.compile(r"\b([a-zA-Z0-9.\-_]{2,256}@(?!gmail|yahoo|outlook|hotmail)[a-zA-Z]{2,64})\b", re.IGNORECASE)
+    # UPI VPA: strictly require known UPI PSP domains from allowlist
+    "UPI_VPA": re.compile(
+        rf"\b([a-zA-Z0-9.\-_]{{2,256}}@(?:{UPI_PSP_ALLOWLIST}))\b",
+        re.IGNORECASE
+    )
 }
+
+def is_valid_tg_handle(handle: str) -> bool:
+    clean = handle.lower().lstrip("@").lstrip("+")
+    if clean in TG_STOPWORDS:
+        return False
+    if len(clean) < 4:
+        return False
+    return True
+
+def is_valid_phone(num: str, match_start: int, match_end: int, text: str) -> bool:
+    # 1. Reject if all digits after the first are identical (e.g. 9999999999, 9000000000, 9111111111)
+    if len(num) == 10:
+        tail = num[1:]
+        if len(set(tail)) <= 1:
+            return False
+
+    # 2. Reject if preceded by "rs", "rs.", "₹", "$"
+    prefix = text[:match_start].rstrip()
+    if re.search(r"(?i)(?:rs\.?|₹|\$)$", prefix):
+        return False
+
+    # 3. Reject if followed by "views", "subs", "likes"
+    suffix = text[match_end:].lstrip()
+    if re.search(r"(?i)^(?:views|subs|subscribers|likes)\b", suffix):
+        return False
+
+    return True
 
 def extract_indicators(cleaned_text: str) -> List[ExtractedIndicator]:
     indicators = []
@@ -85,35 +144,37 @@ def extract_indicators(cleaned_text: str) -> List[ExtractedIndicator]:
     # 1. Telegram Handles
     for match in PATTERNS["TG_LINK"].finditer(cleaned_text):
         handle = match.group(1)
-        if handle.lower() not in [h.lower() for h in seen] and handle.lower() not in ["joinchat", "channel"]:
-            seen.add(handle.lower())
+        norm_key = handle.lower().lstrip("@")
+        if norm_key not in seen and is_valid_tg_handle(handle):
+            seen.add(norm_key)
             indicators.append(ExtractedIndicator(
                 indicator_type="TELEGRAM",
                 raw_value=match.group(0),
-                normalized_value=handle if handle.startswith('+') else f"@{handle}",
+                normalized_value=handle if handle.startswith('+') else f"@{handle.lstrip('@')}",
                 confidence=0.98
             ))
 
     for match in PATTERNS["TG_MENTION"].finditer(cleaned_text):
         handle = match.group(1)
-        if handle.lower() not in [h.lower() for h in seen]:
-            seen.add(handle.lower())
+        norm_key = handle.lower().lstrip("@")
+        if norm_key not in seen and is_valid_tg_handle(handle):
+            seen.add(norm_key)
             indicators.append(ExtractedIndicator(
                 indicator_type="TELEGRAM",
                 raw_value=match.group(0),
-                normalized_value=handle if handle.startswith('+') else f"@{handle}",
+                normalized_value=handle if handle.startswith('+') else f"@{handle.lstrip('@')}",
                 confidence=0.90
             ))
 
     # 2. WhatsApp Targets
     for match in PATTERNS["WA_LINK"].finditer(cleaned_text):
         num = re.sub(r"\D", "", match.group(1))
-        if num not in seen:
+        if num not in seen and len(num) >= 10:
             seen.add(num)
             indicators.append(ExtractedIndicator(
                 indicator_type="WHATSAPP",
                 raw_value=match.group(0),
-                normalized_value=num,
+                normalized_value=f"+{num}" if not num.startswith("+") else num,
                 confidence=0.98
             ))
 
@@ -121,7 +182,7 @@ def extract_indicators(cleaned_text: str) -> List[ExtractedIndicator]:
         num_raw = re.sub(r"\D", "", match.group(1))
         if len(num_raw) >= 10:
             num = num_raw[-10:]
-            if num not in seen:
+            if num not in seen and is_valid_phone(num, match.start(), match.end(), cleaned_text):
                 seen.add(num)
                 indicators.append(ExtractedIndicator(
                     indicator_type="WHATSAPP",
@@ -130,18 +191,20 @@ def extract_indicators(cleaned_text: str) -> List[ExtractedIndicator]:
                     confidence=0.92
                 ))
 
-    # 3. Direct Phone Numbers (if not already captured as WA)
+    # 3. Direct Phone Numbers (if not already captured as WA and valid)
     for match in PATTERNS["IN_PHONE"].finditer(cleaned_text):
         num = match.group(1)
         normalized = f"+91{num}"
         if num not in seen and normalized not in seen:
-            seen.add(num)
-            indicators.append(ExtractedIndicator(
-                indicator_type="PHONE",
-                raw_value=match.group(0),
-                normalized_value=normalized,
-                confidence=0.85
-            ))
+            if is_valid_phone(num, match.start(), match.end(), cleaned_text):
+                seen.add(num)
+                seen.add(normalized)
+                indicators.append(ExtractedIndicator(
+                    indicator_type="PHONE",
+                    raw_value=match.group(0),
+                    normalized_value=normalized,
+                    confidence=0.85
+                ))
 
     # 4. UPI VPAs
     for match in PATTERNS["UPI_VPA"].finditer(cleaned_text):

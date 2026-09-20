@@ -81,17 +81,32 @@ async def trigger_scan(scan_req: ScanRequest, background_tasks: BackgroundTasks)
 @app.get("/api/metrics")
 def get_metrics():
     try:
-        v = supabase.table("seen_videos").select("video_id", count="exact").execute().count
-        c = supabase.table("seen_comments").select("comment_id", count="exact").execute().count
-        l = supabase.table("actionable_leads").select("id", count="exact").execute().count
-        return {"videos": v, "comments": c, "leads": l}
-    except Exception: return {"videos": 0, "comments": 0, "leads": 0}
+        v = supabase.table("seen_videos").select("video_id", count="exact").execute().count or 0
+        c = supabase.table("seen_comments").select("comment_id", count="exact").execute().count or 0
+        s = 0
+        try:
+            s = supabase.table("candidate_sightings").select("id", count="exact").execute().count or 0
+        except Exception:
+            pass
+        l = 0
+        try:
+            l = supabase.table("actionable_leads").select("*", count="exact").execute().count or 0
+        except Exception:
+            pass
+        return {"videos": v, "comments": c, "sightings": s, "leads": l}
+    except Exception:
+        return {"videos": 0, "comments": 0, "sightings": 0, "leads": 0}
 
 @app.get("/api/leads")
 def get_leads():
     try:
-        res = supabase.table("enriched_leads").select("*").order("enriched_at", desc=True).limit(50).execute()
-        return {"leads": res.data}
+        # First attempt to fetch from actionable_leads
+        res = supabase.table("actionable_leads").select("*").order("campaign_score", desc=True).limit(50).execute()
+        if res.data:
+            return {"leads": res.data}
+        # Fallback to enriched_leads
+        res_old = supabase.table("enriched_leads").select("*").order("enriched_at", desc=True).limit(50).execute()
+        return {"leads": res_old.data or []}
     except Exception:
         return {"leads": []}
 

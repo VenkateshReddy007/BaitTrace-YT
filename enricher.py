@@ -1,14 +1,18 @@
+import json
 import logging
 import os
 import re
 import sys
 import time
 import urllib.request
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 load_dotenv()
 
 from supabase import create_client, Client
+import yt_dlp
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger("BaitTrace-Enricher")
@@ -18,7 +22,75 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 if not SUPABASE_URL or not SUPABASE_KEY:
     logger.critical("FATAL: SUPABASE_URL and SUPABASE_KEY must be set in environment or .env file.")
     sys.exit(1)
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+CHANNEL_CACHE_FILE = Path("data/channel_cache.json")
+
+def _load_channel_cache() -> Dict[str, Any]:
+    if CHANNEL_CACHE_FILE.exists():
+        try:
+            with open(CHANNEL_CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def _save_channel_cache(cache: Dict[str, Any]):
+    try:
+        CHANNEL_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(CHANNEL_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to save channel cache: {e}")
+
+_channel_cache = _load_channel_cache()
+
+def enrich_channel(channel_id: str) -> Dict[str, Any]:
+    """Fetches channel metadata (subscriber count, video count, join date)
+    using yt-dlp flat extraction, backed by an on-disk JSON cache.
+    """
+    if not channel_id:
+        return {}
+
+    if channel_id in _channel_cache:
+        return _channel_cache[channel_id]
+
+    channel_url = (
+        f"https://www.youtube.com/channel/{channel_id}"
+        if channel_id.startswith("UC")
+        else f"https://www.youtube.com/{channel_id}"
+    )
+
+    ydl_opts = {
+        'quiet': True,
+        'skip_download': True,
+        'extract_flat': True,
+        'playlist_items': '1'
+    }
+
+    meta = {
+        "channel_id": channel_id,
+        "subscriber_count": None,
+        "video_count": None,
+        "channel_name": None,
+        "description": ""
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(channel_url, download=False)
+            if info:
+                meta["channel_name"] = info.get("channel") or info.get("uploader") or info.get("title")
+                meta["subscriber_count"] = info.get("channel_follower_count") or info.get("subscriber_count")
+                meta["video_count"] = info.get("playlist_count")
+                meta["description"] = info.get("description", "")
+    except Exception as e:
+        logger.debug(f"yt-dlp channel extraction failed for {channel_id}: {e}")
+
+    _channel_cache[channel_id] = meta
+    _save_channel_cache(_channel_cache)
+    return meta
 
 def probe_telegram_handle(handle: str) -> dict:
     clean_handle = handle.replace("@", "").strip()
@@ -58,7 +130,7 @@ def main():
     actionable = res_leads.data
     
     res_enriched = supabase.table("enriched_leads").select("target").execute()
-    seen_targets = {r["target"] for r in res_enriched.data}
+    seen_targets = {r.get("target") for r in res_enriched.data if r.get("target")}
 
     if not actionable:
         logger.error("No actionable leads found to enrich.")
@@ -66,9 +138,8 @@ def main():
 
     new_records = 0
     for lead in actionable:
-        target = lead.get("target")
-        
-        if target in seen_targets:
+        target = lead.get("handle_norm") or lead.get("target")
+        if not target or target in seen_targets:
             continue
 
         if lead.get("indicator_type") == "TELEGRAM":
@@ -77,21 +148,18 @@ def main():
             
             enrich_record = {
                 "target": target,
+                "handle_norm": target,
                 "indicator_type": lead.get("indicator_type"),
-                "fraud_class": lead.get("fraud_class"),
-                "confidence": lead.get("confidence"),
-                "ai_reasoning": lead.get("ai_reasoning"),
+                "fraud_class": lead.get("scam_type") or lead.get("fraud_class"),
+                "confidence": lead.get("campaign_score") or lead.get("confidence"),
+                "ai_reasoning": lead.get("llm_campaign_reason") or lead.get("ai_reasoning"),
                 "telegram_intel": intel,
-                "author": lead.get("author"),
-                "source_video_id": lead.get("source_video_id"),
-                "source_title": lead.get("source_title"),
-                "source_url": lead.get("source_url"),
-                "raw_comment": lead.get("raw_comment")
+                "source_url": lead.get("representative_video_url") or lead.get("source_url")
             }
             supabase.table("enriched_leads").upsert(enrich_record).execute()
             seen_targets.add(target)
             new_records += 1
-            time.sleep(1.5)
+            time.sleep(1.0)
 
     if new_records > 0:
         logger.info(f"Successfully enriched {new_records} net-new targets.")

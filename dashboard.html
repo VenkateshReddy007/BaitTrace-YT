@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BaitTrace Command Center</title>
+    <title>BaitTrace Command Center - Campaign Intelligence</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -32,7 +32,7 @@
                         d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                 </svg>
                 <h1 class="text-amazon text-2xl font-bold tracking-widest flex items-center gap-2">
-                    BAITTRACE <span class="text-white opacity-80 text-lg font-medium">_SENSOR</span>
+                    BAITTRACE <span class="text-white opacity-80 text-lg font-medium">v2 _CAMPAIGN_MATRIX</span>
                 </h1>
             </div>
             <div class="flex items-center gap-2">
@@ -48,24 +48,22 @@
         <div class="bg-charcoal p-6 rounded border border-amazon/30 shadow-md">
             <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                 <div>
-                    <label class="block text-xs font-bold text-amazon mb-1 uppercase tracking-wider">Target
-                        Vector</label>
+                    <label class="block text-xs font-bold text-amazon mb-1 uppercase tracking-wider">Target Lane</label>
                     <select id="queryType"
                         class="w-full bg-obsidian border border-gray-700 text-white p-2.5 rounded text-sm outline-none focus:border-amazon transition">
-                        <option value="ALL">ALL VECTORS</option>
-                        <option value="LURE">LURES ONLY</option>
-                        <option value="PARASITE">PARASITES ONLY</option>
+                        <option value="ALL">ALL LANES (Victim-Rich + Lures)</option>
+                        <option value="VICTIM_RICH">VICTIM-RICH (High-Traffic Comments)</option>
+                        <option value="LURE">LURES ONLY (Active Traps)</option>
+                        <option value="EXPOSURE">EXPOSURE (Awareness Seeds)</option>
                     </select>
                 </div>
                 <div>
-                    <label class="block text-xs font-bold text-amazon mb-1 uppercase tracking-wider">Video Depth (Per
-                        Query)</label>
+                    <label class="block text-xs font-bold text-amazon mb-1 uppercase tracking-wider">Video Depth (Per Query)</label>
                     <input type="number" id="limit" value="5" min="1" max="50"
                         class="w-full bg-obsidian border border-gray-700 text-white p-2.5 rounded text-sm outline-none focus:border-amazon transition">
                 </div>
                 <div>
-                    <label class="block text-xs font-bold text-amazon mb-1 uppercase tracking-wider">Max Comments (Per
-                        Video)</label>
+                    <label class="block text-xs font-bold text-amazon mb-1 uppercase tracking-wider">Max Comments (Per Video)</label>
                     <input type="number" id="maxComments" value="35" min="5" max="200"
                         class="w-full bg-obsidian border border-gray-700 text-white p-2.5 rounded text-sm outline-none focus:border-amazon transition">
                 </div>
@@ -86,7 +84,7 @@
         </div>
 
         <!-- Telemetry Cards -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
             <div class="bg-charcoal p-6 rounded border-l-4 border-amazon shadow-md">
                 <h3 class="text-gray-400 text-xs font-bold uppercase tracking-widest mb-2">Videos Monitored</h3>
                 <p id="metric-videos" class="text-4xl font-bold text-white font-mono">--</p>
@@ -95,19 +93,22 @@
                 <h3 class="text-gray-400 text-xs font-bold uppercase tracking-widest mb-2">Comments Parsed</h3>
                 <p id="metric-comments" class="text-4xl font-bold text-white font-mono">--</p>
             </div>
+            <div class="bg-charcoal p-6 rounded border-l-4 border-blue-500 shadow-md">
+                <h3 class="text-blue-400 text-xs font-bold uppercase tracking-widest mb-2">Sightings Staged</h3>
+                <p id="metric-sightings" class="text-4xl font-bold text-white font-mono">--</p>
+            </div>
             <div class="bg-charcoal p-6 rounded border-l-4 border-amazon shadow-md">
-                <h3 class="text-amazon text-xs font-bold uppercase tracking-widest mb-2">Actionable Leads</h3>
+                <h3 class="text-amazon text-xs font-bold uppercase tracking-widest mb-2">Promoted Campaigns</h3>
                 <p id="metric-leads" class="text-4xl font-bold text-white font-mono">--</p>
             </div>
         </div>
 
         <!-- Terminal Feed -->
         <div class="bg-[#050505] rounded border border-gray-800 shadow-inner overflow-hidden font-mono text-xs">
-            <div
-                class="p-2.5 border-b border-gray-800 flex justify-between items-center bg-charcoal text-amazon font-bold">
+            <div class="p-2.5 border-b border-gray-800 flex justify-between items-center bg-charcoal text-amazon font-bold">
                 <div class="flex items-center gap-2">
                     <span class="inline-block w-2 h-2 rounded-full bg-amazon"></span>
-                    <span>TERMINAL FEED_</span>
+                    <span>OBSERVABILITY LOG STREAM_</span>
                 </div>
                 <button onclick="document.getElementById('terminal-feed').innerHTML=''"
                     class="text-gray-400 hover:text-white transition text-[11px] uppercase tracking-wider">
@@ -128,7 +129,7 @@
                             d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z">
                         </path>
                     </svg>
-                    Live Target Ledger
+                    Campaign Threat Intelligence Ledger
                 </h2>
                 <span class="text-xs text-gray-500 font-mono">Auto-refreshes every 5s</span>
             </div>
@@ -136,10 +137,11 @@
                 <table class="w-full text-left border-collapse text-sm">
                     <thead>
                         <tr class="bg-[#0e0e0e] text-amazon text-xs uppercase tracking-wider border-b border-gray-800">
-                            <th class="p-4 font-bold">Target (Direct Link)</th>
-                            <th class="p-4 font-bold">Type / Intel</th>
-                            <th class="p-4 font-bold">Fraud Vector</th>
-                            <th class="p-4 font-bold">Origin Video</th>
+                            <th class="p-4 font-bold">Threat Target</th>
+                            <th class="p-4 font-bold">Tier</th>
+                            <th class="p-4 font-bold">Role / Vector</th>
+                            <th class="p-4 font-bold">Scope</th>
+                            <th class="p-4 font-bold">Sighted On</th>
                             <th class="p-4 font-bold text-right">Action</th>
                         </tr>
                     </thead>
@@ -183,9 +185,10 @@
             try {
                 const res = await fetch('/api/metrics');
                 const data = await res.json();
-                document.getElementById('metric-videos').innerText = data.videos.toLocaleString();
-                document.getElementById('metric-comments').innerText = data.comments.toLocaleString();
-                document.getElementById('metric-leads').innerText = data.leads.toLocaleString();
+                document.getElementById('metric-videos').innerText = (data.videos || 0).toLocaleString();
+                document.getElementById('metric-comments').innerText = (data.comments || 0).toLocaleString();
+                document.getElementById('metric-sightings').innerText = (data.sightings || 0).toLocaleString();
+                document.getElementById('metric-leads').innerText = (data.leads || 0).toLocaleString();
             } catch (e) { }
         }
 
@@ -197,47 +200,55 @@
                 tbody.innerHTML = '';
 
                 if (!data.leads || data.leads.length === 0) {
-                    tbody.innerHTML = `<tr><td colspan="5" class="p-8 text-center text-gray-500 italic">No actionable leads harvested yet. Execute a sweep above to populate targets.</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="6" class="p-8 text-center text-gray-500 italic">No campaign threats confirmed yet. Execute a sweep to evaluate sighting targets.</td></tr>`;
                     return;
                 }
 
                 data.leads.forEach(lead => {
-                    const intel = lead.telegram_intel || {};
-                    const isBroadcast = intel.entity_type === 'BROADCAST_CHANNEL';
-                    const cleanTarget = (lead.target || '').replace('@', '').trim();
-                    const tgUrl = lead.indicator_type === 'TELEGRAM' ? `https://t.me/${cleanTarget}` : '#';
+                    const handle = lead.handle_norm || lead.target || '';
+                    const cleanTarget = handle.replace('@', '').trim();
+                    const isTg = (lead.indicator_type || '').toUpperCase() === 'TELEGRAM';
+                    const tgUrl = isTg ? `https://t.me/${cleanTarget}` : '#';
+                    const tier = lead.tier || (lead.campaign_score >= 75 ? 'CONFIRMED' : 'PROBABLE');
+                    const distinctVideos = lead.distinct_video_count || 1;
+                    const role = lead.llm_role || 'RECRUITER';
+                    const scamType = (lead.scam_type || lead.fraud_class || 'UNKNOWN').replace(/_/g, ' ');
+
+                    let tierBadge = 'border-yellow-500/40 text-yellow-400 bg-yellow-500/10';
+                    if (tier === 'CONFIRMED') tierBadge = 'border-red-500/40 text-red-400 bg-red-500/10 font-bold';
+                    else if (tier === 'WATCH') tierBadge = 'border-blue-500/40 text-blue-400 bg-blue-500/10';
 
                     const tr = document.createElement('tr');
                     tr.className = 'hover:bg-[#151515] transition-colors';
                     tr.innerHTML = `
                         <td class="p-4 font-mono font-bold">
-                            <a href="${tgUrl}" target="_blank" rel="noopener noreferrer" class="text-amazon hover:underline inline-flex items-center gap-1.5" title="Open in Telegram Web">
-                                ${lead.target}
+                            <a href="${tgUrl}" target="_blank" rel="noopener noreferrer" class="text-amazon hover:underline inline-flex items-center gap-1.5" title="Inspect Target">
+                                ${handle}
                                 <svg class="w-3.5 h-3.5 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
                             </a>
+                            <span class="block text-[10px] text-gray-500 font-sans mt-0.5">${lead.indicator_type}</span>
                         </td>
                         <td class="p-4">
-                            <span class="px-2 py-0.5 text-[11px] font-bold uppercase rounded border ${isBroadcast ? 'border-blue-500/40 text-blue-400 bg-blue-500/10' : 'border-emerald-500/40 text-emerald-400 bg-emerald-500/10'}">
-                                ${intel.entity_type || 'PROBING...'}
+                            <span class="px-2 py-0.5 text-[11px] rounded border ${tierBadge}">
+                                ${tier}
                             </span>
-                            <p class="text-[11px] text-gray-400 mt-1 truncate max-w-xs" title="${intel.tg_bio || ''}">
-                                ${intel.tg_title || ''}
-                            </p>
+                            <span class="block text-[11px] text-gray-400 mt-1">Score: ${lead.campaign_score || 0}/100</span>
                         </td>
                         <td class="p-4">
-                            <span class="text-white font-medium">${lead.fraud_class.replace(/_/g, ' ')}</span>
-                            <p class="text-[11px] text-gray-500 mt-0.5">Author: ${lead.author}</p>
+                            <span class="text-white font-medium">${scamType}</span>
+                            <p class="text-[11px] text-gray-500 mt-0.5">Role: <span class="text-gray-300 font-semibold">${role}</span></p>
+                        </td>
+                        <td class="p-4">
+                            <span class="text-white font-mono font-semibold">${distinctVideos}</span> <span class="text-gray-400">videos</span>
+                            <p class="text-[10px] text-gray-500">${lead.distinct_author_count || 1} distinct authors</p>
                         </td>
                         <td class="p-4 max-w-xs">
-                            <a href="${lead.source_url}" target="_blank" rel="noopener noreferrer" class="text-gray-300 hover:text-amazon truncate block underline" title="${lead.source_title}">
-                                ${lead.source_title || 'View Video'}
+                            <a href="${lead.representative_video_url || lead.source_url || '#'}" target="_blank" rel="noopener noreferrer" class="text-gray-300 hover:text-amazon truncate block underline" title="Sighted On Video">
+                                Evidence Link
                             </a>
                         </td>
                         <td class="p-4 text-right">
-                            ${isBroadcast
-                            ? `<button disabled class="px-3 py-1.5 bg-gray-800 text-gray-500 rounded text-xs font-bold cursor-not-allowed">MONITOR ONLY</button>`
-                            : `<a href="${tgUrl}" target="_blank" rel="noopener noreferrer" class="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white font-bold rounded text-xs shadow-[0_0_10px_rgba(220,38,38,0.4)] transition inline-block">DISPATCH PERSONA</a>`
-                        }
+                            <a href="${tgUrl}" target="_blank" rel="noopener noreferrer" class="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white font-bold rounded text-xs shadow-[0_0_10px_rgba(220,38,38,0.4)] transition inline-block">PIVOT / INSPECT</a>
                         </td>
                     `;
                     tbody.appendChild(tr);
