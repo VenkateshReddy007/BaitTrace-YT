@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+websockets
+yt-dlp
+youtube-comment-downloader
+pydantic
+python-dotenv
+pytest
