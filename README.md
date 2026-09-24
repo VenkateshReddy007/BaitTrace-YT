@@ -57,13 +57,44 @@ GEMINI_API_KEY=your-gemini-api-key
 ### Running the Pipeline
 
 ```bash
-# Single execution run (5 videos, up to 35 comments each, all query funnels)
-python main.py --once --limit 5 --max-comments 35 --query-type ALL
+# Single execution run (20 videos per query, up to 50 comments each, all query funnels)
+python main.py --once --limit 20 --max-comments 50 --query-type ALL
 
 # Start the Live Monitoring Dashboard server
 python server.py
 ```
 Open `http://localhost:8000` to access the live dashboard.
+
+### Running BaitTrace Continuously
+
+Use `scheduler.py` to run sweeps in a loop with automatic PENDING_RETRY
+clearing and daily telemetry accumulation:
+
+```bash
+# Default: sweep every 3 hours
+python scheduler.py
+
+# Custom interval (e.g. every 30 minutes for testing)
+python scheduler.py --interval-minutes 30
+
+# Full configuration
+python scheduler.py --interval-minutes 180 --limit 20 --max-comments 50 \
+    --llm-call-budget 15 --query-sample-size 10 --query-type ALL
+```
+
+**How it works:**
+
+1. Before each discovery sweep, the scheduler calls `reprocess_pending_sightings()`
+   to clear any PENDING_RETRY backlog from a prior quota-exhausted run.
+2. Runs `run_pipeline()` with auto-pivot enabled (pass `--no-auto-pivot` to main.py
+   to disable).
+3. At the end of each sweep, prints a running daily total (comments scanned,
+   sightings staged, promotions by tier) that resets at local midnight.
+4. **Ctrl+C** is handled gracefully: the current sweep's flush calls finish before
+   the process exits. Press Ctrl+C a second time to force-quit immediately.
+
+**Expected log cadence:** Each sweep takes 5–20 minutes depending on `--limit` and
+video comment density. Between sweeps, the scheduler sleeps for `--interval-minutes`.
 
 ### Running Tests
 

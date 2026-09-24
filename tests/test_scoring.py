@@ -91,3 +91,72 @@ def test_simhash_near_duplicates():
 
     assert hamming_distance(h1, h2) <= 5
     assert hamming_distance(h1, h3) > 10
+
+
+class TestCrossRunHistoricalScoring:
+    """§4: Verify that historical sightings from a prior run are merged
+    into the current run's campaign score, so a handle seen once in run 1
+    and once in run 2 scores as 2 distinct videos / 2 distinct authors.
+    """
+
+    def test_two_runs_merge_sightings(self):
+        """Simulate two separate runs for the same handle.
+        Run 1: 1 sighting from video A / author X.
+        Run 2: 1 sighting from video B / author Y (fresh in-memory state).
+        After merging historical rows, compute_campaign_score must see
+        distinct_video_count=2 and distinct_author_count=2.
+        """
+        handle = "@cross_run_scammer"
+
+        # --- Run 1 sighting ---
+        sighting_run1 = {
+            "video_id": "vid_run1_AAA",
+            "video_title": "Earn Money Online",
+            "comment_id": "comment_run1_001",
+            "author": "author_X_burner",
+            "author_channel_id": "UC_authorX",
+            "comment_text": "Join telegram @cross_run_scammer daily income guaranteed",
+            "llm_role": "RECRUITER",
+            "llm_confidence": 0.92,
+            "heuristic_score": 0.98,
+            "is_creator_author": False,
+            "channel_meta": {"video_count": 0, "subscriber_count": 0},
+        }
+
+        # --- Run 2 sighting (fresh process, no memory of run 1) ---
+        sighting_run2 = {
+            "video_id": "vid_run2_BBB",
+            "video_title": "Stock Market Tips",
+            "comment_id": "comment_run2_002",
+            "author": "author_Y_shill",
+            "author_channel_id": "UC_authorY",
+            "comment_text": "Contact @cross_run_scammer for VIP signals profit daily",
+            "llm_role": "RECRUITER",
+            "llm_confidence": 0.90,
+            "heuristic_score": 0.98,
+            "is_creator_author": False,
+            "channel_meta": {"video_count": 0, "subscriber_count": 0},
+        }
+
+        # Without historical merge (run 2 alone):
+        score_single = compute_campaign_score(handle, [sighting_run2])
+        assert score_single["distinct_video_count"] == 1
+        assert score_single["distinct_author_count"] == 1
+        # Single-sighting must NEVER reach CONFIRMED
+        assert score_single["tier"] != "CONFIRMED"
+
+        # With historical merge (run 1 + run 2):
+        merged = [sighting_run2, sighting_run1]  # run2 is "current", run1 from DB
+        score_merged = compute_campaign_score(handle, merged)
+        assert score_merged["distinct_video_count"] == 2, (
+            f"Expected 2 distinct videos after merge, got {score_merged['distinct_video_count']}"
+        )
+        assert score_merged["distinct_author_count"] == 2, (
+            f"Expected 2 distinct authors after merge, got {score_merged['distinct_author_count']}"
+        )
+        # Merged score must be higher than single-sighting score
+        assert score_merged["campaign_score"] > score_single["campaign_score"], (
+            f"Merged score ({score_merged['campaign_score']}) should be higher than "
+            f"single ({score_single['campaign_score']})"
+        )
+

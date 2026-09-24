@@ -18,9 +18,12 @@ class DiscoveredVideo(BaseModel):
     view_count: Optional[int] = 0
 
 # Restructured threat discovery matrix across 3 distinct operational lanes
+# Each lane has 15+ queries including native-script variants in Hindi, Bengali,
+# Malayalam, Telugu, Tamil, and Kannada to match multi-lingual scam targeting.
 FALLBACK_QUERIES: Dict[str, List[str]] = {
     # High-traffic legitimate videos where scammers infest the comments
     "VICTIM_RICH": [
+        # English / Hinglish
         "stock market basics for beginners hindi",
         "intraday option trading strategies beginners",
         "how to apply for government jobs online 2026",
@@ -28,24 +31,72 @@ FALLBACK_QUERIES: Dict[str, List[str]] = {
         "best side income ideas for students in india",
         "work from home genuine jobs without investment",
         "how to reset google pay upi pin state bank",
-        "instant loan without cibil score app download"
+        "instant loan without cibil score app download",
+        "mutual fund SIP for beginners india 2026",
+        # Hindi (Devanagari)
+        "शेयर मार्केट कैसे सीखे नए लोग",
+        "ऑनलाइन पैसे कमाने के तरीके 2026",
+        "सरकारी नौकरी ऑनलाइन आवेदन कैसे करें",
+        # Bengali
+        "অনলাইনে টাকা ইনকাম করার উপায় ২০২৬",
+        "শেয়ার বাজার শেখার উপায় বাংলা",
+        # Malayalam
+        "ഓൺലൈൻ പണം സമ്പാദിക്കാനുള്ള വഴികൾ 2026",
+        # Telugu
+        "ఆన్‌లైన్ డబ్బు సంపాదించే మార్గాలు 2026",
+        "షేర్ మార్కెట్ బేసిక్స్ తెలుగు",
+        # Tamil
+        "ஆன்லைன் பணம் சம்பாதிக்கும் வழிகள் 2026",
+        # Kannada
+        "ಆನ್‌ಲೈನ್ ಹಣ ಗಳಿಸುವ ಮಾರ್ಗಗಳು 2026",
     ],
     # Active scam vector lures
     "LURE": [
+        # English / Hinglish
         "earn money online daily payment telegram channel",
         "work from home review rating job payment proof",
         "google maps review job daily payout whatsapp",
         "part time typing job contact telegram",
         "colour prediction bot hack script proof link",
-        "prepaid task income withdrawal proof 2026"
+        "prepaid task income withdrawal proof 2026",
+        "crypto investment double money telegram group",
+        "online task earning app telegram link join",
+        "rating job daily salary without investment 2026",
+        # Hindi
+        "टेलीग्राम से पैसे कमाओ डेली पेमेंट प्रूफ",
+        "ऑनलाइन टास्क जॉब टेलीग्राम ग्रुप ज्वाइन करें",
+        "कलर प्रेडिक्शन ऐप हैक स्क्रिप्ट 2026",
+        # Bengali
+        "টেলিগ্রাম থেকে টাকা আয় করুন প্রমাণ সহ",
+        # Telugu
+        "టెలిగ్రామ్ ద్వారా డబ్బు సంపాదన రోజు పేమెంట్",
+        # Tamil
+        "டெலிகிராம் பணம் சம்பாதிக்கும் வழி 2026",
+        # Kannada
+        "ಟೆಲಿಗ್ರಾಮ್ ಮೂಲಕ ಹಣ ಗಳಿಸಿ ದೈನಂದಿನ ಪಾವತಿ",
     ],
     # Scam exposure/awareness channels (rich in victim reports & handle seeds)
     "EXPOSURE": [
+        # English / Hinglish
         "task scam telegram reality exposed",
         "part time job scam telegram victims report",
         "work from home rating scam police complaint cyber cell",
         "colour prediction app scam bust",
-        "fake crypto telegram investment scam revealed"
+        "fake crypto telegram investment scam revealed",
+        "telegram job scam victim story india 2026",
+        "online fraud complaint cyber crime portal india",
+        "rating job scam exposed whatsapp group",
+        "crypto scam telegram group exposed 2026",
+        "UPI fraud scam complaint how to report",
+        # Hindi
+        "टेलीग्राम टास्क स्कैम एक्सपोज़्ड पीड़ित रिपोर्ट",
+        "ऑनलाइन फ्रॉड शिकायत साइबर क्राइम पोर्टल",
+        # Bengali
+        "টেলিগ্রাম স্ক্যাম প্রতারণা অভিযোগ ভুক্তভোগী",
+        # Telugu
+        "టెలిగ్రామ్ స్కామ్ మోసం బాధితుల నివేదిక",
+        # Tamil
+        "டெலிகிராம் மோசடி அம்பலமானது பாதிக்கப்பட்டவர் புகார்",
     ]
 }
 

@@ -88,3 +88,10 @@ ALTER TABLE IF EXISTS candidate_sightings ADD COLUMN IF NOT EXISTS channel_meta 
 -- EVALUATED   = LLM actually reviewed this indicator and returned a verdict.
 -- PENDING_RETRY = LLM was unavailable (quota/overload); llm_is_fraud/llm_role hold fail-closed defaults.
 ALTER TABLE IF EXISTS candidate_sightings ADD COLUMN IF NOT EXISTS llm_status TEXT DEFAULT 'EVALUATED';
+
+-- v2.2: Creator-author flag — true when the comment's author IS the video's own channel.
+-- Used by scoring.py for the -50 PENALTY_CREATOR_PROMO suppression.
+ALTER TABLE IF EXISTS candidate_sightings ADD COLUMN IF NOT EXISTS is_creator_author BOOLEAN DEFAULT FALSE;
+
+-- Index on llm_status for fast reprocess_pending queries
+CREATE INDEX IF NOT EXISTS idx_sightings_llm_status ON candidate_sightings(llm_status);
