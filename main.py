@@ -22,7 +22,7 @@ from supabase import create_client, Client
 
 from discovery import DiscoveredVideo, generate_dynamic_queries, search_youtube
 from parser import extract_indicators, normalize_text
-from brain import evaluate_comment, evaluate_handle_campaign
+from brain import evaluate_comment, evaluate_batch, evaluate_handle_campaign, remaining_call_budget
 from scoring import compute_campaign_score, author_burner_score
 from enricher import enrich_channel
 from pivot import pivot_on_handle
@@ -79,7 +79,8 @@ def build_sighting_record(
     llm_confidence: float,
     llm_reason: str,
     heuristic_score: float,
-    channel_meta: Dict[str, Any]
+    channel_meta: Dict[str, Any],
+    llm_status: str = "PENDING_RETRY"
 ) -> Dict[str, Any]:
     """Constructs a candidate_sightings payload matching the database schema."""
     return {
@@ -101,7 +102,8 @@ def build_sighting_record(
         "llm_confidence": llm_confidence,
         "llm_reason": llm_reason,
         "heuristic_score": heuristic_score,
-        "channel_meta": channel_meta
+        "channel_meta": channel_meta,
+        "llm_status": llm_status
     }
 
 
@@ -156,6 +158,8 @@ class PipelineTelemetry:
         self.indicators_rejected = 0
         self.sightings_written = 0
         self.llm_calls_made = 0
+        self.llm_evaluated = 0
+        self.llm_pending_retry = 0
         self.handles_scored = 0
         self.promotions_by_tier = defaultdict(int)
 
@@ -168,6 +172,8 @@ class PipelineTelemetry:
         print(f"  Indicators Rejected (Stopwords):  {self.indicators_rejected:>6}")
         print(f"  Candidate Sightings Staged:       {self.sightings_written:>6}")
         print(f"  LLM Inference Invocations:        {self.llm_calls_made:>6}")
+        print(f"  LLM Status: EVALUATED:            {self.llm_evaluated:>6}")
+        print(f"  LLM Status: PENDING_RETRY:        {self.llm_pending_retry:>6}")
         print(f"  Campaign Handles Scored:          {self.handles_scored:>6}")
         print("-" * 65)
         print("  PROMOTIONS BY CAMPAIGN TIER:")
@@ -248,18 +254,85 @@ class StateManager:
         self._sightings_buffer.clear()
 
 
+def reprocess_pending_sightings(budget: int = 15):
+    """Fetch all PENDING_RETRY sightings from Supabase, evaluate them within the
+    given LLM call budget, and upsert the updated verdicts back to the DB.
+    """
+    logger.info(f"♻️  reprocess_pending: fetching PENDING_RETRY sightings (budget={budget})...")
+    try:
+        res = supabase.table("candidate_sightings") \
+            .select("id,handle_norm,comment_id,comment_text,video_title,heuristic_score") \
+            .eq("llm_status", "PENDING_RETRY") \
+            .order("heuristic_score", desc=True) \
+            .limit(budget * 20) \
+            .execute()
+        rows = res.data or []
+    except Exception as e:
+        logger.error(f"reprocess_pending: failed to fetch rows: {format_supabase_error(e)}")
+        return
+
+    if not rows:
+        logger.info("♻️  reprocess_pending: no PENDING_RETRY sightings found.")
+        return
+
+    logger.info(f"♻️  reprocess_pending: {len(rows)} PENDING_RETRY sightings queued.")
+
+    # Reshape to evaluate_batch format
+    items = [
+        {
+            "comment_id": row["comment_id"],
+            "video_title": row.get("video_title", ""),
+            "comment_text": row.get("comment_text", ""),
+            "target": row["handle_norm"],
+            "heuristic_score": row.get("heuristic_score", 0.0),
+        }
+        for row in rows
+    ]
+
+    batch_results = evaluate_batch(items, budget=budget)
+
+    evaluated = 0
+    still_pending = 0
+    for result in batch_results:
+        verdict = result["verdict"]
+        status = verdict.get("llm_status", "PENDING_RETRY")
+        update_payload = {
+            "llm_is_fraud": verdict.get("is_fraud", False),
+            "llm_role": verdict.get("role", "NEUTRAL"),
+            "llm_confidence": verdict.get("confidence", 0.0),
+            "llm_reason": verdict.get("reason", ""),
+            "llm_status": status,
+        }
+        try:
+            supabase.table("candidate_sightings") \
+                .update(update_payload) \
+                .eq("comment_id", result["comment_id"]) \
+                .eq("handle_norm", result["target"]) \
+                .execute()
+            if status == "EVALUATED":
+                evaluated += 1
+            else:
+                still_pending += 1
+        except Exception as e:
+            logger.error(f"reprocess_pending: upsert failed for ({result['comment_id']}, {result['target']}): {format_supabase_error(e)}")
+
+    logger.info(f"♻️  reprocess_pending complete: {evaluated} EVALUATED, {still_pending} still PENDING_RETRY.")
+
+
 def run_pipeline(
     limit_per_query: int = 5,
     max_comments: int = 50,
     query_type: str = "ALL",
-    pivot_mode: bool = False
+    pivot_mode: bool = False,
+    llm_call_budget: int = 15
 ):
     try:
         _run_pipeline_internal(
             limit_per_query=limit_per_query,
             max_comments=max_comments,
             query_type=query_type,
-            pivot_mode=pivot_mode
+            pivot_mode=pivot_mode,
+            llm_call_budget=llm_call_budget
         )
     except RuntimeError as e:
         if "candidate_sightings" in str(e):
@@ -272,7 +345,8 @@ def _run_pipeline_internal(
     limit_per_query: int = 5,
     max_comments: int = 50,
     query_type: str = "ALL",
-    pivot_mode: bool = False
+    pivot_mode: bool = False,
+    llm_call_budget: int = 15
 ):
     state = StateManager()
     downloader = YoutubeCommentDownloader()
@@ -325,7 +399,14 @@ def _run_pipeline_internal(
     # In-memory tracking of all sightings per handle during this sweep
     handle_sightings_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
-    # --- Phase 3: Extraction & Triage ---
+    # Accumulator for deferred batch LLM evaluation
+    # Each entry: {comment_id, video_title, comment_text, target, heuristic_score, _sighting_key}
+    pending_llm_items: List[Dict[str, Any]] = []
+    # Map (handle_norm, comment_id) -> sighting_record for post-eval update
+    sighting_key_map: Dict[str, Dict[str, Any]] = {}
+
+    # --- Phase 3: Extraction (NO LLM calls — collect all indicators first) ---
+    logger.info("📥 Phase 3: Extracting indicators from all videos (LLM deferred)...")
     for idx, video in enumerate(fresh_videos, 1):
         logger.info(f"[{idx}/{len(fresh_videos)}] ({video.lane}) Scanning: '{video.title[:45]}...'")
 
@@ -366,51 +447,43 @@ def _run_pipeline_internal(
                 # Channel metadata enrichment (cached)
                 channel_meta = enrich_channel(author_channel) if author_channel else {}
 
-                # Targets for batched Gemini triage
-                targets = [ind.normalized_value for ind in indicators]
-                target_to_ind = {ind.normalized_value: ind for ind in indicators}
+                for ind in indicators:
+                    target = ind.normalized_value
+                    # Stage a PENDING_RETRY sighting immediately (will be updated after batch eval)
+                    sighting_record = build_sighting_record(
+                        target=target,
+                        indicator_type=ind.indicator_type,
+                        raw_value=ind.raw_value,
+                        cid=cid,
+                        author=author,
+                        author_channel=author_channel,
+                        video_id=video.video_id,
+                        video_title=video.title,
+                        video_url=video.url,
+                        lane=video.lane,
+                        is_reply=is_reply,
+                        raw_text=raw_text,
+                        posted_time=posted_time,
+                        llm_is_fraud=False,
+                        llm_role="NEUTRAL",
+                        llm_confidence=0.0,
+                        llm_reason="Awaiting batch LLM evaluation",
+                        heuristic_score=ind.confidence,
+                        channel_meta=channel_meta,
+                        llm_status="PENDING_RETRY"
+                    )
 
-                try:
-                    telemetry.llm_calls_made += 1
-                    verdicts = evaluate_comment(video.title, clean_text, targets)
+                    state.buffer_sighting(sighting_record)
+                    sk = f"{target}|{cid}"
+                    sighting_key_map[sk] = sighting_record
 
-                    for target, intel in zip(targets, verdicts):
-                        ind = target_to_ind[target]
-                        llm_role = intel.get("role", "NEUTRAL")
-                        llm_is_fraud = intel.get("is_fraud", False)
-
-                        sighting_record = build_sighting_record(
-                            target=target,
-                            indicator_type=ind.indicator_type,
-                            raw_value=ind.raw_value,
-                            cid=cid,
-                            author=author,
-                            author_channel=author_channel,
-                            video_id=video.video_id,
-                            video_title=video.title,
-                            video_url=video.url,
-                            lane=video.lane,
-                            is_reply=is_reply,
-                            raw_text=raw_text,
-                            posted_time=posted_time,
-                            llm_is_fraud=llm_is_fraud,
-                            llm_role=llm_role,
-                            llm_confidence=intel.get("confidence", 0.0),
-                            llm_reason=intel.get("reason", ""),
-                            heuristic_score=ind.confidence,
-                            channel_meta=channel_meta
-                        )
-
-                        # Stage to candidate_sightings buffer
-                        state.buffer_sighting(sighting_record)
-                        handle_sightings_map[target].append(sighting_record)
-
-                        if llm_role == "RECRUITER":
-                            logger.info(f"🚨 Sighted RECRUITER indicator: {target} ({intel.get('reason')})")
-
-                except Exception as e:
-                    logger.warning(f"Triage failed for targets {targets}: {e}")
-                    continue
+                    pending_llm_items.append({
+                        "comment_id": cid,
+                        "video_title": video.title,
+                        "comment_text": clean_text,
+                        "target": target,
+                        "heuristic_score": ind.confidence,
+                    })
 
         except Exception as e:
             logger.warning(f"Comment iteration error on {video.url}: {e}")
@@ -418,11 +491,53 @@ def _run_pipeline_internal(
 
         state.mark_video_seen(video.video_id)
         state.flush_comments()
-        state.flush_sightings(telemetry)
 
-    # Final flush of all raw sightings
-    state.flush_comments()
+    # Flush all PENDING_RETRY sightings to DB before LLM evaluation
     state.flush_sightings(telemetry)
+
+    # --- Phase 3.5: Deferred Batch LLM Evaluation ---
+    logger.info(f"🧠 Phase 3.5: Batch LLM evaluation ({len(pending_llm_items)} indicators, budget={llm_call_budget} calls)...")
+    batch_results = evaluate_batch(pending_llm_items, budget=llm_call_budget)
+    telemetry.llm_calls_made = len({r["comment_id"] for r in batch_results})  # unique comment calls
+
+    # Apply verdicts: update in-memory sightings and upsert back to DB
+    updates_to_flush: List[Dict[str, Any]] = []
+    for result in batch_results:
+        verdict = result["verdict"]
+        target = result["target"]
+        cid = result["comment_id"]
+        llm_status = verdict.get("llm_status", "PENDING_RETRY")
+        llm_role = verdict.get("role", "NEUTRAL")
+        llm_is_fraud = verdict.get("is_fraud", False)
+
+        sk = f"{target}|{cid}"
+        if sk in sighting_key_map:
+            sighting_key_map[sk].update({
+                "llm_is_fraud": llm_is_fraud,
+                "llm_role": llm_role,
+                "llm_confidence": verdict.get("confidence", 0.0),
+                "llm_reason": verdict.get("reason", ""),
+                "llm_status": llm_status,
+            })
+            updates_to_flush.append(sighting_key_map[sk])
+            handle_sightings_map[target].append(sighting_key_map[sk])
+
+        if llm_status == "EVALUATED":
+            telemetry.llm_evaluated += 1
+            if llm_role == "RECRUITER":
+                logger.info(f"🚨 Sighted RECRUITER indicator: {target} ({verdict.get('reason')})")
+        else:
+            telemetry.llm_pending_retry += 1
+
+    # Upsert evaluated sightings back to DB
+    for i in range(0, len(updates_to_flush), _BATCH_CHUNK_SIZE):
+        chunk = updates_to_flush[i:i + _BATCH_CHUNK_SIZE]
+        try:
+            supabase.table("candidate_sightings").upsert(chunk).execute()
+        except Exception as e:
+            err_detail = format_supabase_error(e)
+            logger.error(f"CRITICAL: Failed to upsert evaluated sightings batch ({len(chunk)} items): {err_detail}")
+            raise RuntimeError(f"candidate_sightings write failed: {err_detail}") from e
 
     # --- Phase 4: Campaign Scoring & Promotion ---
     logger.info("⚖️ Evaluating campaign-level threat scores for all sighted handles...")
@@ -481,15 +596,31 @@ def main():
         action="store_true",
         help="Enable seed-to-campaign pivot expansion / rescan on known handles from handles table"
     )
+    parser.add_argument(
+        "--llm-call-budget",
+        type=int,
+        default=15,
+        help="Max LLM calls per sweep (default 15; each call evaluates all targets in one comment)"
+    )
+    parser.add_argument(
+        "--reprocess-pending",
+        action="store_true",
+        help="Retry all PENDING_RETRY sightings in the DB using today's remaining quota, then exit"
+    )
 
     args = parser.parse_args()
+
+    if args.reprocess_pending:
+        reprocess_pending_sightings(budget=args.llm_call_budget)
+        return
 
     if args.once:
         run_pipeline(
             limit_per_query=args.limit,
             max_comments=args.max_comments,
             query_type=args.query_type,
-            pivot_mode=args.pivot
+            pivot_mode=args.pivot,
+            llm_call_budget=args.llm_call_budget
         )
     else:
         while True:
@@ -497,7 +628,8 @@ def main():
                 limit_per_query=args.limit,
                 max_comments=args.max_comments,
                 query_type=args.query_type,
-                pivot_mode=args.pivot
+                pivot_mode=args.pivot,
+                llm_call_budget=args.llm_call_budget
             )
             logger.info("Cycle complete. Sleeping for 1 hour...")
             time.sleep(3600)

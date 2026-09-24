@@ -83,3 +83,8 @@ CREATE INDEX IF NOT EXISTS idx_handles_score ON handles(campaign_score);
 
 -- Migration-safe idempotent column additions:
 ALTER TABLE IF EXISTS candidate_sightings ADD COLUMN IF NOT EXISTS channel_meta JSONB DEFAULT '{}'::jsonb;
+
+-- v2.1: LLM quota tracking — distinguishes a real verdict from a quota-exhausted placeholder.
+-- EVALUATED   = LLM actually reviewed this indicator and returned a verdict.
+-- PENDING_RETRY = LLM was unavailable (quota/overload); llm_is_fraud/llm_role hold fail-closed defaults.
+ALTER TABLE IF EXISTS candidate_sightings ADD COLUMN IF NOT EXISTS llm_status TEXT DEFAULT 'EVALUATED';
