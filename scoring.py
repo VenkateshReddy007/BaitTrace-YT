@@ -297,7 +297,7 @@ def compute_campaign_score(handle_norm: str, sightings: List[Dict[str, Any]]) ->
             status = "SUPPRESSED"
     else:
         # Multi-sighting campaign
-        if not is_victim_majority and (final_score >= THRESHOLD_CONFIRMED or (is_multi_sighting and has_recruiter)):
+        if not is_victim_majority and not is_creator_handle and (final_score >= THRESHOLD_CONFIRMED or (is_multi_sighting and has_recruiter)):
             tier = "CONFIRMED"
             status = "CONFIRMED"
         elif final_score >= THRESHOLD_PROBABLE:

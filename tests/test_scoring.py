@@ -216,6 +216,9 @@ class TestDiscoveryQueryPoolSizes:
     """§2: Verify each lane has at least 15 queries after expansion."""
 
     def test_all_lanes_have_minimum_15_queries(self):
+        import sys
+        from unittest.mock import MagicMock
+        sys.modules.setdefault("yt_dlp", MagicMock())
         from discovery import FALLBACK_QUERIES
         for lane, queries in FALLBACK_QUERIES.items():
             assert len(queries) >= 15, (
@@ -223,6 +226,9 @@ class TestDiscoveryQueryPoolSizes:
             )
 
     def test_lure_lane_has_non_english_queries(self):
+        import sys
+        from unittest.mock import MagicMock
+        sys.modules.setdefault("yt_dlp", MagicMock())
         from discovery import FALLBACK_QUERIES
         lure_queries = FALLBACK_QUERIES["LURE"]
         # At least one query should contain non-ASCII (Hindi/Bengali/etc.)
