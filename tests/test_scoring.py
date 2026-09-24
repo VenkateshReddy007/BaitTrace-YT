@@ -160,3 +160,97 @@ class TestCrossRunHistoricalScoring:
             f"single ({score_single['campaign_score']})"
         )
 
+
+class TestCreatorAuthorPenalty:
+    """§6: Verify that is_creator_author=True triggers the -50 penalty and
+    suppresses what would otherwise be a CONFIRMED campaign.
+    """
+
+    def test_creator_handle_suppressed(self):
+        """4 videos / 4 authors with RECRUITER should be CONFIRMED,
+        but if is_creator_author=True the -50 penalty should prevent it."""
+        sightings_legit = [
+            {
+                "video_id": f"vid_creator_{i}",
+                "video_title": f"My Channel Update {i}",
+                "author": f"@fan_user_{i}",
+                "comment_text": "Join our community @creator_channel for updates",
+                "llm_role": "RECRUITER",
+                "llm_confidence": 0.90,
+                "channel_meta": {"video_count": 0, "subscriber_count": 0},
+                "is_creator_author": True,  # <-- the video creator posted it
+            }
+            for i in range(1, 5)
+        ]
+
+        result = compute_campaign_score("@creator_channel", sightings_legit)
+        # The -50 penalty should prevent CONFIRMED
+        assert result["tier"] != "CONFIRMED", (
+            f"Creator's own handle should NOT reach CONFIRMED, got {result['tier']} "
+            f"(score={result['campaign_score']})"
+        )
+
+    def test_non_creator_same_data_confirms(self):
+        """Same data as above but is_creator_author=False should reach CONFIRMED."""
+        sightings = [
+            {
+                "video_id": f"vid_noncreator_{i}",
+                "video_title": f"Trading Tips Part {i}",
+                "author": f"@shill_bot_{i}",
+                "comment_text": "Join telegram @scam_channel daily profits guaranteed",
+                "llm_role": "RECRUITER",
+                "llm_confidence": 0.95,
+                "channel_meta": {"video_count": 0, "subscriber_count": 0},
+                "is_creator_author": False,
+            }
+            for i in range(1, 5)
+        ]
+
+        result = compute_campaign_score("@scam_channel", sightings)
+        assert result["tier"] == "CONFIRMED", (
+            f"Non-creator 4-video campaign should be CONFIRMED, got {result['tier']}"
+        )
+
+
+class TestDiscoveryQueryPoolSizes:
+    """§2: Verify each lane has at least 15 queries after expansion."""
+
+    def test_all_lanes_have_minimum_15_queries(self):
+        from discovery import FALLBACK_QUERIES
+        for lane, queries in FALLBACK_QUERIES.items():
+            assert len(queries) >= 15, (
+                f"Lane {lane} has only {len(queries)} queries, expected >= 15"
+            )
+
+    def test_lure_lane_has_non_english_queries(self):
+        from discovery import FALLBACK_QUERIES
+        lure_queries = FALLBACK_QUERIES["LURE"]
+        # At least one query should contain non-ASCII (Hindi/Bengali/etc.)
+        has_non_ascii = any(
+            any(ord(c) > 127 for c in q) for q in lure_queries
+        )
+        assert has_non_ascii, "LURE lane should include native-script query variants"
+
+
+class TestConfigConstants:
+    """§5: Verify config.py constants are importable and sane."""
+
+    def test_config_imports_and_values(self):
+        from config import (
+            DEFAULT_LIMIT_PER_QUERY,
+            DEFAULT_MAX_COMMENTS,
+            DEFAULT_QUERY_SAMPLE_SIZE,
+            DEFAULT_LLM_CALL_BUDGET,
+            PIVOT_THRESHOLD,
+            PIVOT_MAX_HANDLES_PER_RUN,
+            DEFAULT_SWEEP_INTERVAL_MINUTES,
+        )
+        assert DEFAULT_LIMIT_PER_QUERY == 20
+        assert DEFAULT_MAX_COMMENTS == 50
+        assert DEFAULT_QUERY_SAMPLE_SIZE == 10
+        assert DEFAULT_LLM_CALL_BUDGET == 15
+        assert PIVOT_THRESHOLD == 20
+        assert PIVOT_MAX_HANDLES_PER_RUN == 5
+        assert DEFAULT_SWEEP_INTERVAL_MINUTES == 180
+
+
