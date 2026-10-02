@@ -22,7 +22,11 @@ from supabase import create_client, Client
 
 from discovery import DiscoveredVideo, generate_dynamic_queries, search_youtube
 from parser import extract_indicators, normalize_text
-from brain import evaluate_comment, evaluate_batch, evaluate_handle_campaign, remaining_call_budget
+from brain import (
+    evaluate_comment, evaluate_batch, evaluate_handle_campaign,
+    remaining_call_budget, explain_promoted_lead,
+    reset_jev_sweep_cost, get_jev_sweep_cost, get_jev_sweep_calls,
+)
 from scoring import compute_campaign_score, author_burner_score
 from enricher import enrich_channel
 from pivot import pivot_on_handle
@@ -35,6 +39,8 @@ from config import (
     PIVOT_THRESHOLD,
     PIVOT_MAX_HANDLES_PER_RUN,
     DEFAULT_SWEEP_INTERVAL_MINUTES,
+    CLASSIFIER_PROVIDER,
+    JEV_LLM_CALL_BUDGET,
 )
 
 logging.basicConfig(
@@ -179,11 +185,18 @@ class PipelineTelemetry:
         self.auto_pivot_handles_selected = 0
         self.auto_pivot_videos_discovered = 0
         self.auto_pivot_sightings_staged = 0
+        # Jev cost tracking
+        self.jev_spend = 0.0
+        self.jev_calls = 0
+        # Gemini explain calls
+        self.gemini_explain_calls = 0
 
     def print_summary(self):
+        active_provider = os.environ.get("CLASSIFIER_PROVIDER", CLASSIFIER_PROVIDER)
         print("\n" + "=" * 65)
         print("         BAITTRACE v2 PIPELINE OBSERVABILITY MATRIX")
         print("=" * 65)
+        print(f"  Classifier Provider:              {active_provider:>6}")
         print(f"  Total Comments Scanned:           {self.comments_scanned:>6}")
         print(f"  Indicators Extracted (Raw):       {self.indicators_extracted:>6}")
         print(f"  Indicators Rejected (Stopwords):  {self.indicators_rejected:>6}")
@@ -193,6 +206,12 @@ class PipelineTelemetry:
         print(f"  LLM Status: EVALUATED:            {self.llm_evaluated:>6}")
         print(f"  LLM Status: PENDING_RETRY:        {self.llm_pending_retry:>6}")
         print(f"  Campaign Handles Scored:          {self.handles_scored:>6}")
+        if active_provider == "jev":
+            print("-" * 65)
+            print("  JEV COST TRACKING:")
+            print(f"    Jev Spend This Sweep:           ${self.jev_spend:.4f}")
+            print(f"    Jev Calls This Sweep:           {self.jev_calls:>6}")
+            print(f"    Gemini Explain Calls:           {self.gemini_explain_calls:>6}")
         print("-" * 65)
         print("  PROMOTIONS BY CAMPAIGN TIER:")
         print(f"    - CONFIRMED (High Threat):      {self.promotions_by_tier['CONFIRMED']:>6}")
@@ -402,8 +421,17 @@ def _run_pipeline_internal(
     downloader = YoutubeCommentDownloader()
     telemetry = PipelineTelemetry()
 
+    # Reset Jev per-sweep cost tracker
+    reset_jev_sweep_cost()
+
+    active_provider = os.environ.get("CLASSIFIER_PROVIDER", CLASSIFIER_PROVIDER)
+
+    # If using Jev, override budget with the generous Jev budget
+    if active_provider == "jev":
+        llm_call_budget = max(llm_call_budget, JEV_LLM_CALL_BUDGET)
+
     # Print effective config at start of every run
-    print(f"[CONFIG] limit={limit_per_query} max_comments={max_comments} "
+    print(f"[CONFIG] classifier={active_provider} limit={limit_per_query} max_comments={max_comments} "
           f"query_sample={query_sample_size} llm_budget={llm_call_budget} "
           f"pivot_threshold={PIVOT_THRESHOLD} auto_pivot={auto_pivot}")
 
@@ -700,6 +728,20 @@ def _run_pipeline_internal(
         # 2. Promote to actionable_leads ONLY if CONFIRMED or PROBABLE
         if tier in ("CONFIRMED", "PROBABLE"):
             logger.info(f"⭐ PROMOTED TO LEADS: [{tier}] {handle_norm} (Score: {campaign['campaign_score']})")
+
+            # §4: Generate Gemini explanation ONLY for newly promoted leads
+            if active_provider == "jev" and current_sightings:
+                rep_sighting = current_sightings[0]
+                try:
+                    reason_text = explain_promoted_lead(rep_sighting)
+                    telemetry.gemini_explain_calls += 1
+                    # Update the campaign evidence with the explanation
+                    if reason_text:
+                        campaign["evidence"]["gemini_explanation"] = reason_text
+                except Exception as e:
+                    logger.warning(f"explain_promoted_lead failed for {handle_norm}: {e} — promotion proceeds")
+                    # A failed explanation must NEVER block or reverse a promotion
+
             lead_payload = build_lead_payload(
                 handle_norm=handle_norm,
                 indicator_type=indicator_type,
@@ -819,6 +861,9 @@ def _run_pipeline_internal(
         state.flush_sightings(telemetry)
 
     # --- Phase 5: Observability Summary ---
+    # Capture Jev cost data into telemetry before printing
+    telemetry.jev_spend = get_jev_sweep_cost()
+    telemetry.jev_calls = get_jev_sweep_calls()
     telemetry.print_summary()
 
 

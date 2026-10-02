@@ -6,3 +6,6 @@ youtube-comment-downloader
 pydantic
 python-dotenv
 pytest
+requests
+google-genai
+supabase
