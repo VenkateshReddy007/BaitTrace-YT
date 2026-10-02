@@ -1,9 +1,11 @@
 import json
 import logging
 import random
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from pydantic import BaseModel
 import yt_dlp
+from brain import generate_llm_queries
+from datetime import datetime, timezone
 
 logger = logging.getLogger("BaitTrace-Discovery")
 
@@ -100,9 +102,44 @@ FALLBACK_QUERIES: Dict[str, List[str]] = {
     ]
 }
 
-def generate_dynamic_queries() -> Dict[str, List[str]]:
-    """Returns the operational discovery query matrix organized by target lane."""
-    return FALLBACK_QUERIES
+def generate_dynamic_queries(recent_patterns: List[Dict[str, Any]] = None, supabase_client = None) -> Dict[str, List[Dict[str, str]]]:
+    """Returns the operational discovery query matrix organized by target lane.
+    Merges fallback queries with LLM-generated ones based on recent patterns.
+    """
+    merged = {
+        lane: [{"query": q, "source": "FALLBACK"} for q in qs]
+        for lane, qs in FALLBACK_QUERIES.items()
+    }
+    
+    if not recent_patterns or not supabase_client:
+        return merged
+
+    llm_queries = generate_llm_queries(recent_patterns)
+    
+    inserts = []
+    
+    for lane, qs in llm_queries.items():
+        if lane not in merged:
+            merged[lane] = []
+        for q in qs:
+            if not any(mq["query"].lower() == q.lower() for mq in merged[lane]):
+                merged[lane].append({"query": q, "source": "LLM_GENERATED"})
+                inserts.append({
+                    "query_text": q,
+                    "lane": lane,
+                    "source_handles": [p.get("handle_norm", p.get("target", "unknown")) for p in recent_patterns],
+                    "source": "LLM_GENERATED"
+                })
+                
+    if inserts:
+        try:
+            supabase_client.table("generated_queries").upsert(
+                inserts, on_conflict="query_text,lane"
+            ).execute()
+        except Exception as e:
+            logger.warning(f"Failed to persist generated queries: {e}")
+
+    return merged
 
 def search_youtube(
     query: str,

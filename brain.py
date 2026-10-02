@@ -213,7 +213,7 @@ def _jev_evaluate_comment(video_title: str, comment_text: str, targets: list[str
 
         questions = {
             "is_fraud": {
-                "type": "noul",
+                "type": "bool",
                 "question": (
                     "Does this comment actively recruit a victim toward an off-platform "
                     "scam contact (Telegram/WhatsApp/phone/UPI) for a task scam, "
@@ -346,7 +346,7 @@ def _jev_evaluate_handle_campaign(handle: str, sightings: List[Dict[str, Any]]) 
 
     questions = {
         "is_coordinated_campaign": {
-            "type": "noul",
+            "type": "bool",
             "question": (
                 "Is this a coordinated multi-video scam campaign rather than an isolated incident? "
                 "Consider: same handle across multiple unrelated videos, multiple distinct posting authors, "
@@ -797,3 +797,52 @@ Return ONLY the explanation sentence, nothing else."""
     except Exception as e:
         logger.warning(f"explain_promoted_lead failed for {handle}: {e}")
         return f"Promoted on calibrated-decision evidence (role={llm_role}, scam_type={scam_type}); explanation pending"
+
+def generate_llm_queries(recent_patterns: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """Generate dynamic search queries using Gemini based on recent scam patterns."""
+    if not recent_patterns:
+        return {"VICTIM_RICH": [], "LURE": [], "EXPOSURE": []}
+
+    prompt = """You are an expert cyber intelligence analyst for BaitTrace, tracking YouTube scams.
+Based on the following recent scam sightings, generate new YouTube search queries to discover more scams.
+Generate 5-10 new queries for each of these three lanes:
+- VICTIM_RICH: High-traffic legitimate videos where scammers infest comments (e.g. "stock market basics for beginners hindi")
+- LURE: Active scam vector lures (e.g. "earn money online daily payment telegram channel")
+- EXPOSURE: Scam exposure/awareness channels (e.g. "task scam telegram reality exposed")
+
+Recent Patterns:
+"""
+    for p in recent_patterns:
+        prompt += f"- Lane: {p.get('lane')}, Type: {p.get('scam_type')}, Snippet: \"{p.get('comment_text', '')[:100]}\"\n"
+
+    prompt += """
+IMPORTANT RULES:
+1. Provide queries in English, Hinglish, or Hindi (Devanagari script), as these are the primary targets.
+2. DO NOT duplicate existing fallback queries (assume common ones are already covered, propose different angles).
+3. Return the response EXCLUSIVELY as a valid JSON object with keys "VICTIM_RICH", "LURE", "EXPOSURE", each containing a list of string queries. No markdown formatting, no code blocks, just raw JSON.
+"""
+
+    try:
+        response = _client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.7,
+                max_output_tokens=1000,
+            ),
+        )
+        text = response.text.strip()
+        if text.startswith("```json"):
+            text = text[7:-3].strip()
+        elif text.startswith("```"):
+            text = text[3:-3].strip()
+            
+        data = json.loads(text)
+        return {
+            "VICTIM_RICH": data.get("VICTIM_RICH", []),
+            "LURE": data.get("LURE", []),
+            "EXPOSURE": data.get("EXPOSURE", [])
+        }
+    except Exception as e:
+        logger.warning(f"generate_llm_queries failed: {e}")
+        return {"VICTIM_RICH": [], "LURE": [], "EXPOSURE": []}

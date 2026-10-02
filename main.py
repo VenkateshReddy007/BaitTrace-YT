@@ -190,6 +190,8 @@ class PipelineTelemetry:
         self.jev_calls = 0
         # Gemini explain calls
         self.gemini_explain_calls = 0
+        # Dynamic query generation
+        self.llm_queries_used = 0
 
     def print_summary(self):
         active_provider = os.environ.get("CLASSIFIER_PROVIDER", CLASSIFIER_PROVIDER)
@@ -223,6 +225,9 @@ class PipelineTelemetry:
         print(f"    Handles Selected for Pivot:     {self.auto_pivot_handles_selected:>6}")
         print(f"    New Videos Discovered:          {self.auto_pivot_videos_discovered:>6}")
         print(f"    New Sightings Staged:           {self.auto_pivot_sightings_staged:>6}")
+        print("-" * 65)
+        print("  DYNAMIC DISCOVERY:")
+        print(f"    LLM-Generated Queries Used This Sweep: {self.llm_queries_used:>2}")
         print("=" * 65 + "\n")
 
 
@@ -456,19 +461,42 @@ def _run_pipeline_internal(
 
     # --- Phase 2: Autonomous Multi-Lane Discovery ---
     logger.info(f"Initiating dynamic discovery sweep ({query_type}) across lanes...")
-    dynamic_queries = generate_dynamic_queries()
+    
+    recent_patterns = []
+    try:
+        res = supabase.table("candidate_sightings").select(
+            "target, scam_type, raw_text, lane"
+        ).eq("llm_is_fraud", True).order("created_at", desc=True).limit(20).execute()
+        if res.data:
+            recent_patterns = [
+                {
+                    "handle_norm": r["target"],
+                    "scam_type": r["scam_type"],
+                    "comment_text": r.get("raw_text", ""),
+                    "lane": r.get("lane", "UNKNOWN")
+                }
+                for r in res.data
+            ]
+    except Exception as e:
+        logger.warning(f"Failed to fetch recent patterns for LLM queries: {e}")
 
-    for lane, query_list in dynamic_queries.items():
+    dynamic_queries = generate_dynamic_queries(recent_patterns, supabase)
+
+    for lane, query_dicts in dynamic_queries.items():
         if query_type != "ALL" and lane != query_type:
             continue
 
         # §2: Sample N queries per lane from the expanded pool
-        if len(query_list) > query_sample_size:
-            sampled_queries = random.sample(query_list, query_sample_size)
+        if len(query_dicts) > query_sample_size:
+            sampled_queries = random.sample(query_dicts, query_sample_size)
         else:
-            sampled_queries = query_list
+            sampled_queries = query_dicts
 
-        for q in sampled_queries:
+        for qd in sampled_queries:
+            q = qd["query"]
+            if qd.get("source") == "LLM_GENERATED":
+                telemetry.llm_queries_used += 1
+                
             sort_by_views = (lane == "VICTIM_RICH")
             found = search_youtube(q, fetch_depth=100, lane=lane, sort_by_views=sort_by_views)
 
@@ -644,7 +672,10 @@ def _run_pipeline_internal(
     for i in range(0, len(updates_to_flush), _BATCH_CHUNK_SIZE):
         chunk = updates_to_flush[i:i + _BATCH_CHUNK_SIZE]
         try:
-            supabase.table("candidate_sightings").upsert(chunk).execute()
+            supabase.table("candidate_sightings").upsert(
+                chunk, 
+                on_conflict="handle_norm,comment_id"
+            ).execute()
         except Exception as e:
             err_detail = format_supabase_error(e)
             logger.error(f"CRITICAL: Failed to upsert evaluated sightings batch ({len(chunk)} items): {err_detail}")
