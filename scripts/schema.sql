@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS candidate_sightings (
     llm_reason TEXT,
     heuristic_score DOUBLE PRECISION DEFAULT 0.0,
     channel_meta JSONB DEFAULT '{}'::jsonb,
+    llm_status TEXT DEFAULT 'EVALUATED',
+    is_creator_author BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT uq_sighting_handle_comment UNIQUE (handle_norm, comment_id)
 );

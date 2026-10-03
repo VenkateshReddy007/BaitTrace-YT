@@ -465,14 +465,14 @@ def _run_pipeline_internal(
     recent_patterns = []
     try:
         res = supabase.table("candidate_sightings").select(
-            "target, scam_type, raw_text, lane"
+            "handle_norm, llm_role, comment_text, lane"
         ).eq("llm_is_fraud", True).order("created_at", desc=True).limit(20).execute()
         if res.data:
             recent_patterns = [
                 {
-                    "handle_norm": r["target"],
-                    "scam_type": r["scam_type"],
-                    "comment_text": r.get("raw_text", ""),
+                    "handle_norm": r["handle_norm"],
+                    "scam_type": r.get("llm_role", "UNKNOWN"),
+                    "comment_text": r.get("comment_text", ""),
                     "lane": r.get("lane", "UNKNOWN")
                 }
                 for r in res.data

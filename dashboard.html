@@ -83,6 +83,45 @@
             </div>
         </div>
 
+        <!-- Scheduler Controls -->
+        <div class="bg-charcoal p-6 rounded border border-amazon/30 shadow-md">
+            <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-2">
+                    <svg class="w-5 h-5 text-amazon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <h3 class="text-amazon text-sm font-bold uppercase tracking-widest">Continuous Scheduler</h3>
+                </div>
+                <span id="scheduler-status-badge"
+                    class="px-2.5 py-1 rounded text-[11px] font-bold uppercase tracking-wider border border-gray-700 text-gray-400 bg-obsidian">
+                    Stopped
+                </span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                <div>
+                    <label class="block text-xs font-bold text-amazon mb-1 uppercase tracking-wider">Interval (minutes)</label>
+                    <input type="number" id="schedulerInterval" value="180" min="1" max="1440"
+                        class="w-full bg-obsidian border border-gray-700 text-white p-2.5 rounded text-sm outline-none focus:border-amazon transition">
+                </div>
+                <div>
+                    <button id="schedulerToggleBtn" onclick="toggleScheduler()"
+                        class="w-full bg-green-600 hover:bg-green-500 text-white font-bold py-2.5 px-6 rounded shadow-md hover:shadow-lg transition-all uppercase tracking-wide flex items-center justify-center gap-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z">
+                            </path>
+                        </svg>
+                        Start Scheduler
+                    </button>
+                </div>
+                <div>
+                    <p id="scheduler-info" class="text-xs text-gray-500 font-mono">Scheduler: Stopped</p>
+                </div>
+            </div>
+            <div id="scheduler-error" class="mt-2 text-red-400 text-xs font-mono hidden"></div>
+        </div>
+
         <!-- Telemetry Cards -->
         <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
             <div class="bg-charcoal p-6 rounded border-l-4 border-amazon shadow-md">
@@ -274,6 +313,90 @@
         setInterval(fetchLeads, 5000);
         fetchMetrics();
         fetchLeads();
+
+        // --- Scheduler Controls ---
+        let schedulerRunning = false;
+
+        async function initSchedulerDefaults() {
+            try {
+                const res = await fetch('/api/config/defaults');
+                const data = await res.json();
+                if (data.default_sweep_interval_minutes) {
+                    document.getElementById('schedulerInterval').value = data.default_sweep_interval_minutes;
+                }
+            } catch (e) { }
+        }
+        initSchedulerDefaults();
+
+        async function pollSchedulerStatus() {
+            try {
+                const res = await fetch('/api/scheduler/status');
+                const data = await res.json();
+                schedulerRunning = data.running;
+                const badge = document.getElementById('scheduler-status-badge');
+                const info = document.getElementById('scheduler-info');
+                const btn = document.getElementById('schedulerToggleBtn');
+
+                if (data.running) {
+                    badge.textContent = 'Running';
+                    badge.className = 'px-2.5 py-1 rounded text-[11px] font-bold uppercase tracking-wider border border-green-500/40 text-green-400 bg-green-500/10';
+                    info.textContent = `Scheduler: Running (every ${data.interval_minutes}m) — PID ${data.pid}`;
+                    btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"></rect><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"></rect></svg> Stop Scheduler`;
+                    btn.className = 'w-full bg-red-600 hover:bg-red-500 text-white font-bold py-2.5 px-6 rounded shadow-md hover:shadow-lg transition-all uppercase tracking-wide flex items-center justify-center gap-2';
+                } else {
+                    badge.textContent = 'Stopped';
+                    badge.className = 'px-2.5 py-1 rounded text-[11px] font-bold uppercase tracking-wider border border-gray-700 text-gray-400 bg-obsidian';
+                    info.textContent = 'Scheduler: Stopped';
+                    btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path></svg> Start Scheduler`;
+                    btn.className = 'w-full bg-green-600 hover:bg-green-500 text-white font-bold py-2.5 px-6 rounded shadow-md hover:shadow-lg transition-all uppercase tracking-wide flex items-center justify-center gap-2';
+                }
+            } catch (e) { }
+        }
+        pollSchedulerStatus();
+        setInterval(pollSchedulerStatus, 5000);
+
+        async function toggleScheduler() {
+            const errDiv = document.getElementById('scheduler-error');
+            errDiv.classList.add('hidden');
+            errDiv.textContent = '';
+
+            if (schedulerRunning) {
+                try {
+                    const res = await fetch('/api/scheduler/stop', { method: 'POST' });
+                    if (!res.ok) {
+                        const data = await res.json();
+                        errDiv.textContent = data.error || 'Failed to stop scheduler';
+                        errDiv.classList.remove('hidden');
+                    }
+                } catch (e) {
+                    errDiv.textContent = 'Network error stopping scheduler';
+                    errDiv.classList.remove('hidden');
+                }
+            } else {
+                const interval = parseInt(document.getElementById('schedulerInterval').value) || 180;
+                try {
+                    const res = await fetch('/api/scheduler/start', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ interval_minutes: interval })
+                    });
+                    if (res.status === 409) {
+                        const data = await res.json();
+                        errDiv.textContent = data.error || 'Scheduler is already running';
+                        errDiv.classList.remove('hidden');
+                    } else if (!res.ok) {
+                        const data = await res.json();
+                        errDiv.textContent = data.error || 'Failed to start scheduler';
+                        errDiv.classList.remove('hidden');
+                    }
+                } catch (e) {
+                    errDiv.textContent = 'Network error starting scheduler';
+                    errDiv.classList.remove('hidden');
+                }
+            }
+            // Immediately re-poll status
+            setTimeout(pollSchedulerStatus, 500);
+        }
     </script>
 </body>
 
