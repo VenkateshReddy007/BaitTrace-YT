@@ -233,6 +233,28 @@ def get_leads():
     except Exception:
         return {"leads": []}
 
+@app.get("/api/sightings/recent")
+def get_recent_sightings(limit: int = 50):
+    try:
+        res = supabase.table("candidate_sightings").select(
+            "handle_norm, indicator_type, video_id, video_title, lane, llm_status, llm_role, heuristic_score, created_at"
+        ).order("created_at", desc=True).limit(limit).execute()
+        return {"sightings": res.data or []}
+    except Exception as e:
+        logger.error(f"Error fetching recent sightings: {e}")
+        return {"sightings": []}
+
+@app.get("/api/handles/watch")
+def get_watch_handles(limit: int = 20):
+    try:
+        res = supabase.table("handles").select(
+            "*"
+        ).eq("tier", "WATCH").order("campaign_score", desc=True).limit(limit).execute()
+        return {"handles": res.data or []}
+    except Exception as e:
+        logger.error(f"Error fetching WATCH handles: {e}")
+        return {"handles": []}
+
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard():
     with open("dashboard.html", "r", encoding="utf-8") as f: return f.read()

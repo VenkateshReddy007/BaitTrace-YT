@@ -19,7 +19,7 @@ if not GEMINI_API_KEY:
     sys.exit(1)
 
 # Model name is configurable via GEMINI_MODEL env var (e.g. gemini-2.0-flash for higher RPD)
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
 
 # Module-level client — created once, reused across all calls
 _client = genai.Client(api_key=GEMINI_API_KEY)
@@ -36,6 +36,18 @@ _QUOTA_ERROR_SIGNALS = (
     "overloaded",
     "unavailable",
 )
+
+_MODEL_REJECTED_SIGNALS = (
+    "no longer available",
+    "not found",
+    "is not found",
+    "invalid model",
+    "404",
+)
+
+def _is_model_rejected(e: Exception) -> bool:
+    err_str = str(e).lower()
+    return any(sig in err_str for sig in _MODEL_REJECTED_SIGNALS)
 
 # Returned when the LLM reviewed the indicator and it's clean (precision fallback)
 _EVALUATED_CLEAN = {
@@ -213,17 +225,21 @@ def _jev_evaluate_comment(video_title: str, comment_text: str, targets: list[str
 
         questions = {
             "is_fraud": {
-                "type": "bool",
-                "question": (
+                "type": "noul",
+                "instructions": (
                     "Does this comment actively recruit a victim toward an off-platform "
                     "scam contact (Telegram/WhatsApp/phone/UPI) for a task scam, "
                     "rating-job scam, or crypto/colour-prediction betting scheme?"
                 ),
+                "criteria": {
+                    "true": "The comment contains a specific off-platform contact handle and language designed to lure victims into a scam funnel.",
+                    "false": "The comment is legitimate, a victim warning, or does not contain active scam recruitment language.",
+                },
             },
             "role": {
                 "type": "choice",
-                "question": "What role does the commenter play relative to this indicator?",
-                "options": {
+                "instructions": "What role does the commenter play relative to this indicator?",
+                "criteria": {
                     "RECRUITER": "Commenter is promoting/advertising the handle — the scammer or their shill",
                     "VICTIM_REPORT": "Commenter is WARNING others, quoting the scammer's handle as a cautionary reference",
                     "NEUTRAL": "Handle is incidental, legitimate, or the creator's own community link",
@@ -231,8 +247,8 @@ def _jev_evaluate_comment(video_title: str, comment_text: str, targets: list[str
             },
             "scam_type": {
                 "type": "choice",
-                "question": "What category of scam does this comment promote?",
-                "options": {
+                "instructions": "What category of scam does this comment promote?",
+                "criteria": {
                     "TASK_SCAM": "Task-based earning scam (e.g. 'complete tasks daily earn 2500')",
                     "RATING_JOB": "App/product rating job scam",
                     "CRYPTO_BETTING": "Crypto investment, colour-prediction, or betting scheme",
@@ -245,13 +261,14 @@ def _jev_evaluate_comment(video_title: str, comment_text: str, targets: list[str
         try:
             resp_data = _call_jev_decision(state_str, questions)
             _record_jev_cost(resp_data)
+            logger.debug(f"Jev raw response for {target}: {resp_data}")
 
             answers = resp_data.get("answers", resp_data)
 
-            # Extract is_fraud from noul probability
+            # Extract is_fraud from noul probability (Jev returns {"type":"noul","noul":0.96})
             is_fraud_answer = answers.get("is_fraud", {})
             if isinstance(is_fraud_answer, dict):
-                noul_prob = is_fraud_answer.get("probability", is_fraud_answer.get("prob", 0.0))
+                noul_prob = is_fraud_answer.get("noul", is_fraud_answer.get("probability", 0.0))
             elif isinstance(is_fraud_answer, (bool, int, float)):
                 noul_prob = float(is_fraud_answer)
             else:
@@ -346,17 +363,21 @@ def _jev_evaluate_handle_campaign(handle: str, sightings: List[Dict[str, Any]]) 
 
     questions = {
         "is_coordinated_campaign": {
-            "type": "bool",
-            "question": (
+            "type": "noul",
+            "instructions": (
                 "Is this a coordinated multi-video scam campaign rather than an isolated incident? "
                 "Consider: same handle across multiple unrelated videos, multiple distinct posting authors, "
                 "and copy-paste template comments."
             ),
+            "criteria": {
+                "true": "The evidence shows a coordinated spam operation with the same handle across multiple unrelated videos, posted by different accounts, using templated language.",
+                "false": "The sightings are isolated, from a single video/author, or appear to be legitimate community engagement.",
+            },
         },
         "campaign_tier": {
             "type": "choice",
-            "question": "Based on all sightings, what threat tier should this handle be assigned?",
-            "options": {
+            "instructions": "Based on all sightings, what threat tier should this handle be assigned?",
+            "criteria": {
                 "CONFIRMED": "Clear, multi-video coordinated fraud operation with strong evidence",
                 "PROBABLE": "Likely fraud with moderate evidence, needs human review",
                 "WATCH": "Some suspicious signals but insufficient evidence for action",
@@ -383,10 +404,10 @@ def _jev_evaluate_handle_campaign(handle: str, sightings: List[Dict[str, Any]]) 
             tier_choice = "WATCH"
             tier_confidence = 0.0
 
-        # Parse coordination noul
+        # Parse coordination noul (Jev returns {"type":"noul","noul":0.96})
         coord_answer = answers.get("is_coordinated_campaign", {})
         if isinstance(coord_answer, dict):
-            coord_prob = coord_answer.get("probability", coord_answer.get("prob", 0.0))
+            coord_prob = coord_answer.get("noul", coord_answer.get("probability", 0.0))
         elif isinstance(coord_answer, (bool, int, float)):
             coord_prob = float(coord_answer)
         else:
@@ -395,16 +416,27 @@ def _jev_evaluate_handle_campaign(handle: str, sightings: List[Dict[str, Any]]) 
         is_fraud = tier_choice in ("CONFIRMED", "PROBABLE")
         role = "RECRUITER" if is_fraud else "NEUTRAL"
 
+        # Determine dominant scam type from sightings rather than defaulting to UNKNOWN
+        scam_type_counts = {}
+        for s in sightings:
+            st = s.get("scam_type", "UNKNOWN")
+            if st and st != "UNKNOWN" and st != "NONE":
+                scam_type_counts[st] = scam_type_counts.get(st, 0) + 1
+        
+        dominant_scam_type = "UNKNOWN"
+        if scam_type_counts:
+            dominant_scam_type = max(scam_type_counts.items(), key=lambda x: x[1])[0]
+
         result = {
             "target": handle,
             "is_fraud": is_fraud,
             "role": role,
-            "scam_type": "UNKNOWN",
+            "scam_type": dominant_scam_type,
             "confidence": tier_confidence,
             "reason": f"Jev campaign: tier={tier_choice}, coordination_prob={coord_prob:.3f}",
             "llm_status": "EVALUATED",
         }
-        logger.info(f"🤖 Jev campaign verdict for {handle} → Tier: {tier_choice}, Coordination: {coord_prob:.3f}")
+        logger.info(f"🤖 Jev campaign verdict for {handle} → Tier: {tier_choice}, ScamType: {dominant_scam_type}, Coordination: {coord_prob:.3f}")
         return result
 
     except Exception as e:
@@ -460,6 +492,8 @@ Return ONLY a valid JSON object matching:
         logger.info(f"🧠 Gemini evaluated {target_handle} -> Role: {data.get('role')}, Fraud: {data.get('is_fraud')}")
         return data
     except Exception as e:
+        if _is_model_rejected(e):
+            logger.error(f"Gemini model '{GEMINI_MODEL}' rejected — check for a newer model name. ({e})")
         if _is_quota_error(e):
             logger.warning(f"⏳ Quota/availability error evaluating {target_handle} — marking PENDING_RETRY. ({e})")
             return {**_PENDING_RETRY, "target": target_handle}
@@ -544,6 +578,8 @@ Return ONLY a valid JSON array of objects, one per target in order:
         return results
 
     except Exception as e:
+        if _is_model_rejected(e):
+            logger.error(f"Gemini model '{GEMINI_MODEL}' rejected — check for a newer model name. ({e})")
         if _is_quota_error(e):
             logger.warning(f"⏳ Quota/availability error for batch {targets} — marking all PENDING_RETRY. ({e})")
             return [{**_PENDING_RETRY, "target": t} for t in targets]
@@ -615,6 +651,8 @@ Return ONLY a valid JSON object:
         logger.info(f"🧠 Campaign verdict for {handle} -> Fraud: {data.get('is_fraud')}, Role: {data.get('role')}")
         return data
     except Exception as e:
+        if _is_model_rejected(e):
+            logger.error(f"Gemini model '{GEMINI_MODEL}' rejected — check for a newer model name. ({e})")
         if _is_quota_error(e):
             logger.warning(f"⏳ Quota error for campaign eval of {handle} — marking PENDING_RETRY. ({e})")
             return {**_PENDING_RETRY, "target": handle}
@@ -795,6 +833,8 @@ Return ONLY the explanation sentence, nothing else."""
             return reason
         return f"Promoted on calibrated-decision evidence (role={llm_role}, scam_type={scam_type}); explanation pending"
     except Exception as e:
+        if _is_model_rejected(e):
+            logger.error(f"Gemini model '{GEMINI_MODEL}' rejected — check for a newer model name. ({e})")
         logger.warning(f"explain_promoted_lead failed for {handle}: {e}")
         return f"Promoted on calibrated-decision evidence (role={llm_role}, scam_type={scam_type}); explanation pending"
 
@@ -844,5 +884,7 @@ IMPORTANT RULES:
             "EXPOSURE": data.get("EXPOSURE", [])
         }
     except Exception as e:
+        if _is_model_rejected(e):
+            logger.error(f"Gemini model '{GEMINI_MODEL}' rejected — check for a newer model name. ({e})")
         logger.warning(f"generate_llm_queries failed: {e}")
         return {"VICTIM_RICH": [], "LURE": [], "EXPOSURE": []}
