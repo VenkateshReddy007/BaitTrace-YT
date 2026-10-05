@@ -1,7 +1,7 @@
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from parser import extract_indicators, normalize_text
+from baittrace.parser import extract_indicators, normalize_text
 
 def test_evasion():
     test_cases = [

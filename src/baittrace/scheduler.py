@@ -21,7 +21,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-from config import (
+from .config import (
     DEFAULT_LIMIT_PER_QUERY,
     DEFAULT_MAX_COMMENTS,
     DEFAULT_QUERY_SAMPLE_SIZE,
@@ -30,7 +30,7 @@ from config import (
 )
 
 # Import lazily after dotenv is loaded by main
-from main import run_pipeline, reprocess_pending_sightings
+from .main import run_pipeline, reprocess_pending_sightings
 
 logging.basicConfig(
     level=logging.INFO,

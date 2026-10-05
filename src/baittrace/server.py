@@ -257,4 +257,4 @@ def get_watch_handles(limit: int = 20):
 
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard():
-    with open("dashboard.html", "r", encoding="utf-8") as f: return f.read()
+    with open("web/dashboard.html", "r", encoding="utf-8") as f: return f.read()

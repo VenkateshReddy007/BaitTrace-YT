@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock
-import brain
+import baittrace.brain
 import requests
 
 def test_brain_evaluate_comment_fails_closed(monkeypatch):

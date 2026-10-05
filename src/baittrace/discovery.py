@@ -4,7 +4,7 @@ import random
 from typing import Dict, List, Optional, Any
 from pydantic import BaseModel
 import yt_dlp
-from brain import generate_llm_queries
+from .brain import generate_llm_queries
 from datetime import datetime, timezone
 
 logger = logging.getLogger("BaitTrace-Discovery")

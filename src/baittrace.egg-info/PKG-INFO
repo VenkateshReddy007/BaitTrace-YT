@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: baittrace
+Version: 2.0.0
+Summary: Autonomous threat-intelligence sensor for YouTube comment-section scam detection
+Requires-Python: >=3.10

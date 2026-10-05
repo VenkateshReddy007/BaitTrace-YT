@@ -1,5 +1,5 @@
 import pytest
-from parser import extract_indicators, normalize_text
+from baittrace.parser import extract_indicators, normalize_text
 
 BENIGN_TEST_CASES = [
     # Confirmed false positives from original pipeline

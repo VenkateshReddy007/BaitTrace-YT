@@ -7,8 +7,8 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from parser import ExtractedIndicator, extract_indicators, normalize_text
-from heuristics import should_escalate
+from baittrace.parser import ExtractedIndicator, extract_indicators, normalize_text
+from baittrace.heuristics import should_escalate
 
 
 class TestExtractIndicatorsReturnType:

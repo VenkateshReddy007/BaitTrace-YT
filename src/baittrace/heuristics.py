@@ -3,7 +3,7 @@ BaitTrace Pre-LLM Heuristic Gate
 Filters indicators before sending to Gemini to cut false positives and API spend.
 """
 import re
-from parser import ExtractedIndicator
+from .parser import ExtractedIndicator
 
 LURE_TOKENS = {
     "payment", "paytm", "withdraw", "withdrawal", "daily",

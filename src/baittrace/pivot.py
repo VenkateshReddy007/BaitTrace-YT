@@ -1,6 +1,6 @@
 import logging
 from typing import List, Set
-from discovery import DiscoveredVideo, search_youtube
+from .discovery import DiscoveredVideo, search_youtube
 
 logger = logging.getLogger("BaitTrace-Pivot")
 

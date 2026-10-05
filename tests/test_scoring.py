@@ -1,5 +1,5 @@
 import pytest
-from scoring import compute_campaign_score, author_burner_score, compute_simhash, hamming_distance
+from baittrace.scoring import compute_campaign_score, author_burner_score, compute_simhash, hamming_distance
 
 def test_single_sighting_never_confirmed():
     """A single-sighting handle must NEVER reach CONFIRMED on LLM opinion alone."""

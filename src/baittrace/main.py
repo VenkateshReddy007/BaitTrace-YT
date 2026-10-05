@@ -20,18 +20,18 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 from youtube_comment_downloader import YoutubeCommentDownloader
 from supabase import create_client, Client
 
-from discovery import DiscoveredVideo, generate_dynamic_queries, search_youtube
-from parser import extract_indicators, normalize_text
-from brain import (
+from .discovery import DiscoveredVideo, generate_dynamic_queries, search_youtube
+from .parser import extract_indicators, normalize_text
+from .brain import (
     evaluate_comment, evaluate_batch, evaluate_handle_campaign,
     remaining_call_budget, explain_promoted_lead,
     reset_jev_sweep_cost, get_jev_sweep_cost, get_jev_sweep_calls,
 )
-from scoring import compute_campaign_score, author_burner_score
-from enricher import enrich_channel
-from pivot import pivot_on_handle
-from heuristics import should_escalate
-from config import (
+from .scoring import compute_campaign_score, author_burner_score
+from .enricher import enrich_channel
+from .pivot import pivot_on_handle
+from .heuristics import should_escalate
+from .config import (
     DEFAULT_LIMIT_PER_QUERY,
     DEFAULT_MAX_COMMENTS,
     DEFAULT_QUERY_SAMPLE_SIZE,

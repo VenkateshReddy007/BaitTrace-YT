@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 import pytest
 
-from main import build_sighting_record, build_handle_payload, build_lead_payload
+from baittrace.main import build_sighting_record, build_handle_payload, build_lead_payload
 
 SCHEMA_SQL_PATH = Path(__file__).resolve().parent.parent / "scripts" / "schema.sql"
 
